@@ -17,3 +17,23 @@ packages = [{include = "alpha_canvas", from = "src"}]
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]
 build-backend = "poetry.core.masonry.api"
+
+[tool.pytest.ini_options]
+pythonpath = [
+  "src"
+]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = [
+    "-v",
+    "--tb=short",
+    "--strict-markers",
+    "--disable-warnings",
+    "-m", "not smoke"  # Skip smoke tests by default
+]
+markers = [
+  "unit: Independent unit tests",
+  "integration: Integration tests that test the interaction between components",
+]
