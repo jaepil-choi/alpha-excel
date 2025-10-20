@@ -34,9 +34,10 @@ class TestConfigLoader:
         
         # Validate structure
         assert isinstance(field_def, dict)
+        assert field_def['db_type'] == 'parquet'
         assert field_def['table'] == 'PRICEVOLUME'
         assert field_def['index_col'] == 'date'
-        assert field_def['security_col'] == 'securities'
+        assert field_def['security_col'] == 'security_id'
         assert field_def['value_col'] == 'adj_close'
         assert 'query' in field_def
         assert len(field_def['query']) > 0
@@ -76,4 +77,5 @@ class TestConfigLoader:
         for field_name, field_def in loader.data_config.items():
             for key in required_keys:
                 assert key in field_def, f"Field '{field_name}' missing key '{key}'"
+
 
