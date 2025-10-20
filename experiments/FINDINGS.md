@@ -144,9 +144,100 @@ ds = ds.assign({'beta': external_array})  # Inject works!
 #### Next Steps
 
 1. ✅ Write TDD tests for DataPanel class
-2. Implement thin DataPanel wrapper
-3. Ensure dimension validation in add_data()
-4. Move to Phase 3 (Expression tree) once tests pass
+2. ✅ Implement thin DataPanel wrapper
+3. ✅ Ensure dimension validation in add_data()
+4. ✅ Move to Phase 3 (Expression tree) - ALL TESTS PASS!
+
+#### Phase 2 Results
+
+- **Experiment**: SUCCESS
+- **Tests**: 8/8 passed
+- **Implementation**: `src/alpha_canvas/core/data_model.py` complete
+- **Time**: < 30 minutes
+- **Blockers**: None
+
+---
+
+## Phase 3: Expression Tree Basics
+
+### Experiment 03: Visitor Pattern & Caching
+
+**Date**: 2025-01-20  
+**Status**: ✅ SUCCESS
+
+**Summary**: Visitor pattern successfully implements depth-first traversal with integer-based step caching for Expression tree nodes.
+
+#### Key Discoveries
+
+1. **ABC Pattern Works Cleanly**
+   - `Expression` as abstract base class with `accept()` method
+   - `Field` as dataclass leaf node - simple and type-safe
+   - Visitor pattern cleanly separates structure from execution
+
+2. **Step Counter Behavior**
+   - `_step_counter` increments after each node visit
+   - Resets to 0 on new `evaluate()` call
+   - Provides predictable, sequential integer keys
+
+3. **Cache Structure Validated**
+   - `Dict[int, Tuple[str, xr.DataArray]]` works perfectly
+   - Step 0, 1, 2... provides clear ordering
+   - Name metadata (e.g., 'Field_returns') useful for debugging
+
+4. **Depth-First Traversal**
+   - Single Field evaluation produces step 0
+   - Sequential Field evaluations produce steps 0, 1, 2...
+   - Later: Composite nodes will visit children first (depth-first)
+
+#### Implementation Implications
+
+- Expression classes should be simple dataclasses
+- Visitor should own cache and step counter (stateful)
+- `evaluate()` must reset state for each evaluation
+- `accept()` method is single line: `return visitor.visit_xxx(self)`
+
+#### Code Evidence
+
+```python
+# Expression pattern:
+@dataclass
+class Field(Expression):
+    name: str
+    def accept(self, visitor):
+        return visitor.visit_field(self)
+
+# Visitor pattern:
+class EvaluateVisitor:
+    def __init__(self, data_source):
+        self._cache: Dict[int, Tuple[str, xr.DataArray]] = {}
+        self._step_counter = 0
+    
+    def visit_field(self, node):
+        result = self._data[node.name]
+        self._cache[self._step_counter] = (f"Field_{node.name}", result)
+        self._step_counter += 1
+        return result
+```
+
+#### Performance Notes
+
+- Field evaluation: < 1ms (dict lookup)
+- Cache storage: < 1ms per entry
+- No memory concerns for typical expression trees
+- Integer keys are O(1) lookup
+
+#### Edge Cases Discovered
+
+- Each `evaluate()` call resets cache (intentional - per-variable caching)
+- Step counter starts at 0, increments AFTER caching
+- For composite nodes (future): children visited before parent
+
+#### Next Steps
+
+1. ✅ Write TDD tests for Expression and Visitor
+2. Implement Expression and Visitor in src/
+3. Add more expression types (TsMean, Add, etc.) later
+4. Move to Phase 4 (Facade integration) once tests pass
 
 ---
 
