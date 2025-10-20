@@ -8,8 +8,8 @@ PRD의 요구사항(F1, F2, F3)을 구현하기 위해 **퍼사드(Facade)**, **
 
   * **역할:** `rc` 객체는 "최상위 컨트롤러"이자 사용자를 위한 \*\*단일 통합 인터페이스(Facade)\*\*입니다. "홈시어터 퍼사드"가 `DvdPlayer`, `Projector`, `Amplifier` 등 복잡한 서브시스템을 지휘하듯, `rc`는 다음과 같은 내부 컴포넌트들을 지휘하고 조율합니다.
   * **소유 컴포넌트:**
-        1. **`rc.db` (State):** `xarray.Dataset` 인스턴스. 모든 `(T, N)` 데이터(원본, 버킷, 시그널)가 `DataArray`로 저장되는 핵심 "데이터 저장소"입니다.
-        2. **`rc.rules` (Registry):** `add_axis`로 정의된 "룰"(`Expression` 객체)을 저장하는 `dict`입니다.
+        1. **`rc.db` (State):** `xarray.Dataset` 인스턴스. 이 `Dataset`은 `(time, asset)`이라는 **좌표(Coordinates)**를 공유하며, `market_cap` (float) 및 `add_data`로 추가된 `size` (string) 등 **타입이 다른 여러 데이터 변수(Data Variables)**들을 `data_vars` 딕셔너리에 저장합니다.
+        2. **`rc.rules` (Registry):** `add_data`로 정의된 "룰"(`Expression` 객체)을 저장하는 `dict`입니다.
         3. **`rc._evaluator` (Executor):** `EvaluateVisitor`의 인스턴스. `Expression` "레시피"를 실행하는 "실행자"입니다.
         4. **`rc._config` (ConfigLoader):** `config/` 디렉토리의 타입별 YAML 파일(e.g., `data.yaml`)을 로드하는 설정 로더입니다.
         5. **`rc._tracer` (PnLTracer):** PnL 추적 및 분석을 담당하는 컴포넌트입니다.
@@ -28,7 +28,51 @@ PRD의 요구사항(F1, F2, F3)을 구현하기 위해 **퍼사드(Facade)**, **
   * **역할:** `Expression` 트리(레시피)를 "방문(visit)"하며 실제 작업을 수행하는 "실행자"입니다. **`Expression` 객체와는 완전히 분리된 별개의 클래스**입니다.
   * **`EvaluateVisitor`:** `rc` 객체(`rc._evaluator`)가 소유하며, `Expression` 트리를 순회하며 `rc.db`의 데이터를 참조하여 실제 `xarray.DataArray`를 계산합니다.
 
-## 2.2. 기능별 아키텍처 구현
+## 2.2. 데이터 모델 아키텍처 (Data Model Architecture)
+
+### A. `DataPanel` (MVP)
+
+* `DataPanel`은 `alpha-canvas`의 핵심 데이터 모델이며, 그 실체는 `xarray.Dataset` 객체입니다.
+* **좌표(Coordinates):** 모든 데이터는 `(time, asset)` 좌표를 공유합니다.
+* **데이터 변수(Data Variables):** 
+  - `rc.add_data(name, expr)` 메서드는 `rc._evaluator`(Visitor)를 호출하여 `expr`를 평가하고, 그 결과 `(T, N) DataArray`를 `rc.db.assign({name: result_array})`를 통해 `data_vars`에 **새로운 데이터 변수(Data Variable)로 추가**합니다.
+  - 예: `rc.add_data('size', cs_quantile(...))`는 `rc.db['size']`를 생성하며, 이는 `string` 타입의 레이블 배열입니다.
+
+### B. "개방형 툴킷" (Open Toolkit) 구현
+
+* **Eject (꺼내기):**
+  - `rc` 객체는 `db` 프로퍼티(e.g., `@property def db`)를 제공하여, `rc.db` 호출 시 래핑된 `xarray.Dataset` 객체를 **순수(pure) `xarray.Dataset` 타입**으로 반환해야 합니다.
+  - 이를 통해 사용자는 Jupyter에서 `scipy`, `statsmodels` 등 외부 라이브러리로 자유롭게 데이터를 조작할 수 있습니다.
+
+* **Inject (주입하기):**
+  - `rc.add_data(name, data)` 메서드는 `Expression` 객체뿐만 아니라, 외부에서 생성된 `xarray.DataArray`도 `data` 인자로 받아 `rc.db`에 "주입(inject)"할 수 있도록 오버로딩되어야 합니다.
+  - 예: `rc.add_data('beta', beta_array)` (beta_array는 외부에서 scipy로 계산한 DataArray)
+
+### C. 유니버스 마스킹 (Universe Masking)
+
+* `DataPanel` 모델은 `(T, N)` 유니버스 마스크를 `where()`를 통해 모든 연산의 입력과 출력에 일관되게 적용하는 로직을 내장해야 합니다.
+* 이를 통해 "투자 가능 유니버스(investable universe)" 개념을 시스템 전반에 일관되게 적용합니다.
+
+## 2.3. 미래 확장: `DataTensor` 아키텍처 (Future Expansion)
+
+### A. `DataTensor` 모델
+
+* 향후 페어 트레이딩 지원을 위해 `(T, N, N)` (e.g., `dims=['time', 'asset_i', 'asset_j']`) 차원을 갖는 `DataTensor` 모델을 도입합니다.
+* 예: 공분산 행렬, 상관관계 행렬 등
+
+### B. 연산자 패밀리 (Operator Families)
+
+`EvaluateVisitor`는 연산자의 입력/출력 타입을 검사하여 타입 안전성을 강제해야 합니다.
+
+1. **다형성(Polymorphic) 연산자:** (`ts_mean` 등) `time` 차원에만 작동하며, `DataPanel`과 `DataTensor` 모두에 적용됩니다.
+2. **`Panel` 전용 연산자:** (`cs_rank`, `cs_quantile` 등) `asset` 차원에 작동하며, `DataTensor` 입력 시 `EvaluateVisitor`가 `TypeError`를 발생시켜야 합니다.
+3. **`Tensor` 전용 연산자:** (`matrix_eigenvector` 등) `(N, N)` 행렬 연산을 수행하며, `Panel` 입력 시 `TypeError`를 발생시켜야 합니다.
+
+### C. 텐서 생명주기 (Tensor Lifecycle)
+
+* 리서처는 `DataTensor`에 `matrix_` 연산자를 적용한 뒤, `matrix_row_mean(tensor)` (`(T, N)`로 **축소**) 또는 `flatten_pairs(tensor)` (`(T, M)`로 **평탄화**) 같은 연산자를 통해 `DataPanel`로 변환하여 `cs_rank` 등 `Panel` 전용 연산자를 다시 사용할 수 있습니다.
+
+## 2.4. 기능별 아키텍처 구현
 
 * **F1 (데이터 검색):**
 
@@ -39,11 +83,11 @@ PRD의 요구사항(F1, F2, F3)을 구현하기 위해 **퍼사드(Facade)**, **
 
 * **F2 (셀렉터 인터페이스):**
 
-    1. `rc.add_axis('size', cs_quantile(rc.data.mcap, ...))` 호출 시, `rc`는 이 `cs_quantile` `Expression` 객체를 `rc.rules['size']`에 등록합니다.
-    2. 사용자가 `mask = rc.axis.size['small']`을 호출합니다.
-    3. `rc`는 `rc.rules['size']`에서 `Expression`을 꺼내 `Equals(..., 'small')`이라는 새 `Expression`을 만듭니다.
-    4. `rc._evaluator` (Visitor)에게 이 `Expression`을 평가(evaluate)하도록 지시합니다.
-    5. `EvaluateVisitor`가 `(T, N)` 불리언 마스크를 반환합니다.
+    1. `rc.add_data('size', cs_quantile(rc.data.mcap, ...))` 호출 시, `rc`는 이 `cs_quantile` `Expression` 객체를 `rc.rules['size']`에 등록합니다.
+    2. `rc._evaluator`가 `Expression`을 평가하여 `(T, N)` 레이블 배열을 생성하고, `rc.db = rc.db.assign({'size': result})`로 `data_vars`에 추가합니다.
+    3. 사용자가 `mask = rc.axis.size['small']`을 호출합니다.
+    4. `rc.axis` accessor는 이를 `(rc.db['size'] == 'small')`이라는 표준 `xarray` 불리언 인덱싱으로 변환합니다.
+    5. `(T, N)` 불리언 마스크가 반환됩니다.
     6. 사용자가 `rc[mask] = 1.0`을 호출하면, `rc`는 `rc.db['my_alpha']` 캔버스에 `xr.where`를 사용하여 값을 할당(overwrite)합니다.
 
 * **F3 (심층 추적성 - 정수 인덱스 기반):**
@@ -87,22 +131,23 @@ PRD의 요구사항(F1, F2, F3)을 구현하기 위해 **퍼사드(Facade)**, **
     2. **독립 정렬 (Independent Sort) 구현:**
           * 각 팩터를 `cs_quantile`로 버킷화하여 독립적인 축(axis)으로 등록합니다.
           * 모든 quantile 계산은 **전체 유니버스** 대상으로 수행됩니다.
-          * 예: `rc.add_axis('size', cs_quantile(rc.data.mcap, ...))`
+          * 예: `rc.add_data('size', cs_quantile(rc.data.mcap, ...))`
     3. **종속 정렬 (Dependent Sort) 구현:**
-          * `cs_quantile`의 `group_by` 파라미터를 사용합니다.
-          * **구현 방식:**
+          * `cs_quantile`의 `group_by` 파라미터를 사용합니다. (pandas-like 인터페이스)
+          * **구현 방식 (xarray.groupby 활용):**
                 1. `cs_quantile(..., group_by='size')` 호출 시
-                2. `cs_quantile` Expression은 `rc.rules['size']`에 등록된 Expression을 참조합니다.
-                3. `EvaluateVisitor`가 평가할 때:
-                      - 먼저 `size` axis를 평가하여 그룹 레이블(e.g., `'small'`, `'big'`)을 얻습니다.
-                      - 각 고유 레이블별로 **별도의 quantile 계산**을 수행합니다.
-                      - 결과를 단일 `DataArray`로 병합하여 반환합니다.
-          * 예: `rc.add_axis('value', cs_quantile(rc.data.btm, group_by='size', ...))`
+                2. `EvaluateVisitor.visit_cs_quantile()`에서:
+                      - `group_by`가 문자열이면, `rc.db[group_by]`로 그룹 레이블 `DataArray`를 조회합니다.
+                      - `data_array.groupby(rc.db['size'])`로 xarray groupby 객체를 생성합니다.
+                      - `.apply(quantile_function, ...)`를 호출하여 각 그룹('small', 'big')별로 별도 quantile을 계산합니다.
+                      - xarray가 자동으로 그룹별 결과를 단일 `DataArray`로 병합하여 반환합니다.
+          * 예: `rc.add_data('value', cs_quantile(rc.data.btm, group_by='size', ...))`
+          * 이는 `xarray.groupby().apply()`의 표준 사용 패턴입니다.
     4. **로우레벨 마스크 (Mask) 구현:**
           * `cs_quantile(..., mask=boolean_mask)` 호출 시
           * `EvaluateVisitor`는 mask가 `True`인 항목들에 대해서만 quantile을 계산합니다.
           * mask가 `False`인 항목은 `NaN` 또는 특수 레이블로 처리됩니다.
-          * 예: `rc.add_axis('momentum', cs_quantile(rc.data.returns, mask=high_liquidity, ...))`
+          * 예: `rc.add_data('momentum', cs_quantile(rc.data.returns, mask=high_liquidity, ...))`
     5. **Fama-French 재현:** 이 패턴들로 독립/종속 이중 정렬 기반 SMB, HML 팩터를 정확히 재현할 수 있습니다.
     6. 이는 alpha-canvas의 핵심 활용 사례이며, 듀얼 인터페이스의 강력함을 보여주는 패턴입니다.
 

@@ -4,7 +4,7 @@
 
 * **제품명:** alpha-canvas
 * **목표:** 퀀트 리서처가 Python 네이티브 환경에서 복잡한 알파 아이디어를 빠르고 직관적으로 테스트하고, 그 과정을 투명하게 추적할 수 있는 차세대 리서치 플랫폼을 제공합니다.
-* **비전:** 데이터 검색부터 팩터 생성, PnL 분석까지의 전 과정을 통합된 단일 인터페이스(`rc`)로 제공하여, 팩터 수익률(factor return) 계산을 포함한 아이디어의 프로토타이핑 속도를 획기적으로 단축시킵니다.
+* **비전:** 데이터 검색부터 팩터 생성, PnL 분석까지의 전 과정을 통합된 단일 인터페이스(`rc`)로 제공하여, 팩터 수익률(factor return) 계산을 포함한 아이디어의 프로토타이핑 속도를 획기적으로 단축시킵니다. MVP(Minimum Viable Product)는 `(T, N)` `DataPanel` 모델을 중심으로 팩터(Alpha)를 생성하고 검증하는 경험에 집중합니다. 또한, `alpha-canvas`를 Jupyter 환경과 완벽히 호환되는 **"개방형 툴킷(Open Toolkit)"**으로 제공하여, 기존 리서치 워크플로우에 유연하게 통합될 수 있도록 합니다.
 
 ## 1.2. 핵심 문제 (The Problem)
 
@@ -13,7 +13,7 @@
 1. **복잡하고 비직관적인 문법:** `bucket(rank(x), range="0.1, 1, 0.1")`와 같이 문자열 파싱에 의존하는 복잡한 문법은 배우기 어렵고 오류를 유발하기 쉽습니다.
 2. **조작 불가능한 "블랙박스" 버킷:**
       * 기존 인터페이스는 버킷(bucket) 연산의 결과로 `'small'`, `'mid'`와 같은 의미 있는 \*\*레이블(Label)\*\*이 아닌, `0, 1, 2` 같은 \*\*정수 인덱스(Index)\*\*를 반환합니다.
-      * 이로 인해 리서처가 "중간(mid) 그룹은 제외하고 싶다" 또는 "Small & High 그룹만 골라내고 싶다"와 같이 특정 그룹을 \*\*선택(Select)\*\*하여 데이터를 조작하는 것이 사실상 불가능합니다.
+      * 이로 인해 리서처가 **"Small Size이면서 High Value인 그룹"**을 선택하거나, **"Mid Value 그룹은 제외"**하는 등 Fama-French 스타일의 정교한 포트폴리오 구성 및 데이터 조작이 불가능했습니다. 본 PRD는 이 문제를 "셀렉터 인터페이스"로 해결하는 것을 핵심 목표로 합니다.
 3. **결과 중심의 불투명성 (낮은 추적성):** `group_neutralize(ts_mean('returns', 3), ...)`와 같은 복잡한 수식의 최종 PnL만 알 수 있을 뿐, *중간 단계*(`ts_mean` 적용 직후)에서 `NaN`이 발생했는지, 또는 어느 연산이 PnL을 하락시켰는지 추적하기 매우 어렵습니다.
 
 ## 1.3. 대상 사용자 (User Persona)
@@ -24,7 +24,44 @@
   * 아이디어를 빠르게 프로토타이핑하고 싶어 합니다.
   * 단순히 PnL 결과만 보는 것이 아니라, 수식의 **각 단계별**로 PnL 기여도와 데이터 상태를 투명하게 추적할 수 있기를 원합니다.
 
-## 1.4. 주요 기능 요구사항 (Key Features)
+## 1.4. 핵심 데이터 모델 (Core Data Model)
+
+### MVP: `DataPanel` (T, N)
+
+* `alpha-canvas`의 MVP는 `(T, N)` (time, asset) 차원을 갖는 `DataPanel` 모델에 집중합니다.
+* `rc` 객체가 관리하는 모든 데이터(`market_cap`, `returns`, `size` 축 등)는 `(T, N)` 좌표계를 공유하며, MVP의 모든 연산자(e.g., `ts_mean`, `cs_quantile`)는 `DataPanel`을 입력받고 반환합니다.
+* `DataPanel`의 실체는 `xarray.Dataset` 객체이며, 이는 표준 Python 생태계와의 완벽한 호환성을 보장합니다.
+
+### 미래 확장 (Future Expansion): `DataTensor` 및 기타
+
+* 향후 릴리스에서는 페어 트레이딩(Pair Trading) 및 공분산 분석을 위한 `DataTensor` `(T, N, N)` 모델을 지원하도록 확장합니다.
+* 또한, 롤링 회귀(Rolling Regression) 파라미터(`alpha`, `beta`) 등을 저장하기 위한 `DataEstimates` `(T, N, K)` 모델도 지원 대상입니다.
+
+## 1.5. "개방형 툴킷" (Open Toolkit) 철학
+
+**요구사항:** `alpha-canvas`는 닫힌 시스템(Closed System)이 아닙니다.
+
+* **Jupyter 호환성 (Eject):** 사용자는 언제든 `rc` 객체에서 계산된 `xarray` 데이터를 "꺼내어(eject)" Jupyter 환경에서 `scipy`, `statsmodels` 등 순수 Python 라이브러리로 자유롭게 조작할 수 있어야 합니다.
+  
+  ```python
+  # Eject: rc에서 순수 xarray.Dataset 꺼내기
+  pure_dataset = rc.db
+  
+  # 외부 라이브러리로 자유롭게 조작
+  beta_values = run_rolling_regression(pure_dataset['returns'], pure_dataset['market'])
+  ```
+
+* **데이터 재주입 (Re-injection):** 사용자는 Jupyter에서 직접 생성한 커스텀 데이터(e.g., 롤링 회귀 베타값)를 다시 `rc` 객체에 새로운 `DataPanel`로 "주입(inject)"하여, `alpha-canvas`의 `ts_mean`과 같은 연산자를 이어서 적용할 수 있어야 합니다.
+  
+  ```python
+  # Inject: 외부에서 생성한 데이터를 rc에 주입
+  rc.add_data('beta', beta_values)  # xarray.DataArray 직접 주입
+  
+  # alpha-canvas 연산자 계속 사용
+  beta_smoothed = rc.ts_mean('beta', 5)
+  ```
+
+## 1.6. 주요 기능 요구사항 (Key Features)
 
 ### F1: Config 기반 데이터 검색 (Data Retrieval)
 
@@ -90,8 +127,8 @@ rc.add_data('mcap', Field('market_cap'))
 rc.add_data('ret', Field('return'))
 
 # 3. "가상 축(Axis) 룰" 동적 등록
-rc.add_axis('size', cs_quantile(rc.data.mcap, bins=2, labels=['small', 'big']))
-rc.add_axis('surge_event', ts_any(rc.data.ret > 0.3, window=504))
+rc.add_data('size', cs_quantile(rc.data.mcap, bins=2, labels=['small', 'big']))
+rc.add_data('surge_event', ts_any(rc.data.ret > 0.3, window=504))
 
 # 4. "셀렉터"로 (T, N) 불리언 마스크 생성 
 mask_long = (rc.axis.size['small'] & rc.axis.surge_event)
@@ -102,7 +139,7 @@ rc[mask_long] = 1.0
 
 ### F3: 심층 추적성 (Deep Traceability)
 
-* **요구사항:** (핵심 문제 3 해결) 사용자는 복잡한 수식의 **각 중간 연산 단계별**로 `(T, N)` 데이터 상태와 PnL을 **선택적으로** 추적할 수 있어야 합니다. 단계는 **정수 인덱스(0부터 시작)**로 참조되며, Expression 트리의 **깊이 우선 탐색(depth-first) 순서**를 따릅니다.
+* **요구사항:** (핵심 문제 3 해결) 사용자는 복잡한 수식의 **각 중간 연산 단계별**로 `(T, N)` 데이터 상태와 PnL을 **선택적으로** 추적할 수 있어야 합니다. 단계는 **정수 인덱스(0부터 시작)**로 참조되며, Expression 트리를 **깊이 우선 탐색(depth-first traversal)**으로 순회하면서 부여됩니다.
 
 * **단계 인덱싱 예시:**
   * Expression: `group_neutralize(ts_mean(Field('returns'), 3), 'subindustry')`
@@ -147,8 +184,8 @@ rc[mask_long] = 1.0
 
 ```python
 # 1. 독립 정렬: 전체 유니버스에서 각각 quantile 계산
-rc.add_axis('size', cs_quantile(rc.data.mcap, bins=2, labels=['small', 'big']))
-rc.add_axis('value', cs_quantile(rc.data.btm, bins=3, labels=['low', 'mid', 'high']))
+rc.add_data('size', cs_quantile(rc.data.mcap, bins=2, labels=['small', 'big']))
+rc.add_data('value', cs_quantile(rc.data.btm, bins=3, labels=['low', 'mid', 'high']))
 
 # 2. Small-Value 포트폴리오 구성
 rc.init_signal_canvas('smb')
@@ -167,10 +204,10 @@ smb_returns = rc.trace_pnl('smb')
 
 ```python
 # 1. 첫 번째 정렬: Size
-rc.add_axis('size', cs_quantile(rc.data.mcap, bins=2, labels=['small', 'big']))
+rc.add_data('size', cs_quantile(rc.data.mcap, bins=2, labels=['small', 'big']))
 
 # 2. 종속 정렬: 각 Size 그룹 내에서 Value quantile 계산
-rc.add_axis('value', cs_quantile(rc.data.btm, bins=3, labels=['low', 'mid', 'high'],
+rc.add_data('value', cs_quantile(rc.data.btm, bins=3, labels=['low', 'mid', 'high'],
                                    group_by='size'))
 
 # 3. HML 포트폴리오 구성 (각 Size 그룹 내에서 High-Low)
@@ -189,7 +226,7 @@ hml_returns = rc.trace_pnl('hml')
 ```python
 # 유동성이 충분한 종목들만 대상으로 모멘텀 quantile 계산
 high_liquidity_mask = rc.data.volume > rc.data.volume.quantile(0.5)
-rc.add_axis('momentum', cs_quantile(rc.data.returns, bins=5, labels=['q1','q2','q3','q4','q5'],
+rc.add_data('momentum', cs_quantile(rc.data.returns, bins=5, labels=['q1','q2','q3','q4','q5'],
                                       mask=high_liquidity_mask))
 ```
 

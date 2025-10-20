@@ -16,13 +16,15 @@ alpha-canvas/
 │       ├── core/
 │       │   ├── facade.py       # AlphaCanvas (rc) 퍼사드 클래스
 │       │   ├── expression.py   # Expression 컴포짓 트리
-│       │   ├── visitor.py      # EvaluateVisitor 패턴
+│       │   ├── visitor.py      # EvaluateVisitor 패턴 (타입 검사 포함)
 │       │   └── config.py       # ConfigLoader
 │       ├── ops/                # 연산자 (ts_mean, rank, etc.)
 │       │   ├── __init__.py
-│       │   ├── timeseries.py   # ts_mean, ts_sum, etc.
-│       │   ├── crosssection.py # cs_rank, cs_quantile, etc.
-│       │   └── transform.py    # group_neutralize, etc.
+│       │   ├── timeseries.py   # ts_mean, ts_sum, etc. (다형성 연산자)
+│       │   ├── crosssection.py # cs_rank 등 (Panel 전용 연산자)
+│       │   ├── classification.py # cs_quantile, cs_cut (분류기/축 생성)
+│       │   ├── transform.py    # group_neutralize, etc.
+│       │   └── tensor.py       # 미래 확장용 (MVP에서는 비어있음)
 │       ├── analysis/
 │       │   ├── pnl.py          # PnLTracer
 │       │   └── metrics.py      # 성과 지표 계산
@@ -56,7 +58,76 @@ rc = AlphaCanvas(config_dir='./custom_config')
 - `AlphaCanvas.__init__()` 내부에서 `ConfigLoader`를 생성하고 `config/` 디렉토리의 모든 `.yaml` 파일을 로드합니다.
 - `ConfigLoader`는 `data.yaml`, `db.yaml` 등을 각각 파싱하여 내부 dict에 저장합니다.
 
-### 3.2.2. Interface A: Formula-based (Excel-like)
+### 3.2.2. 코어 데이터 모델 구현 (Core Data Model Implementation)
+
+#### A. `AlphaCanvas.add_data()` 구현 (`facade.py`)
+
+```python
+def add_data(self, name: str, data: Union[Expression, xr.DataArray]) -> None:
+    """데이터 변수를 Dataset에 추가 (Expression 또는 DataArray 지원)"""
+    
+    # Case 1: Expression 평가 (일반적인 경로)
+    if isinstance(data, Expression):
+        self.rules[name] = data  # Expression 저장 (재평가 가능하도록)
+        result_array = self._evaluator.evaluate(data)  # Visitor로 평가
+        self.db = self.db.assign({name: result_array})  # data_vars에 추가
+    
+    # Case 2: DataArray 직접 주입 (Open Toolkit: Inject)
+    elif isinstance(data, xr.DataArray):
+        # 외부에서 생성한 데이터 주입 (Visitor 건너뛰기)
+        self.db = self.db.assign({name: data})
+    
+    else:
+        raise TypeError(f"data must be Expression or DataArray, got {type(data)}")
+```
+
+**핵심 사항:**
+- `xarray.Dataset.assign()`을 사용하여 Data Variable로 추가
+- `Expression`과 `DataArray` 모두 지원 (오버로딩)
+- Open Toolkit 철학: 외부 계산 결과를 seamlessly inject
+
+#### B. `rc.db` 프로퍼티 (Open Toolkit: Eject)
+
+```python
+@property
+def db(self) -> xr.Dataset:
+    """순수 xarray.Dataset 반환 (Jupyter eject용)"""
+    return self._dataset  # 내부 Dataset을 그대로 노출
+```
+
+**핵심 사항:**
+- 래핑 없이 순수 `xarray.Dataset` 반환
+- 사용자는 `pure_ds = rc.db`로 꺼내서 scipy/statsmodels 사용 가능
+
+#### C. `rc.axis` Accessor 구현 (Selector Interface)
+
+```python
+class AxisAccessor:
+    """rc.axis.size['small'] → (rc.db['size'] == 'small')로 변환"""
+    
+    def __init__(self, rc: 'AlphaCanvas'):
+        self._rc = rc
+    
+    def __getattr__(self, axis_name: str) -> 'AxisSelector':
+        if axis_name not in self._rc.db:
+            raise AttributeError(f"Axis '{axis_name}' not found in rc.db")
+        return AxisSelector(self._rc.db[axis_name])
+
+class AxisSelector:
+    def __init__(self, data_var: xr.DataArray):
+        self._data_var = data_var
+    
+    def __getitem__(self, label: str) -> xr.DataArray:
+        # 표준 xarray 불리언 인덱싱
+        return (self._data_var == label)
+```
+
+**핵심 사항:**
+- `rc.axis.size['small']`은 단순한 syntactic sugar
+- 실제로는 `(rc.db['size'] == 'small')`이라는 표준 xarray 연산
+- 별도의 Expression 생성 없이 즉시 Boolean mask 반환
+
+### 3.2.3. Interface A: Formula-based (Excel-like)
 
 ```python
 from alpha_canvas.ops import ts_mean, rank, group_neutralize, Field
@@ -97,9 +168,9 @@ rc.add_data('ret', Field('returns'))
 rc.add_data('vol', Field('volume'))
 
 # 3. 가상 축(Axis) 정의 - 레이블 기반 버킷
-rc.add_axis('size', cs_quantile(rc.data.mcap, bins=3, labels=['small', 'mid', 'big']))
-rc.add_axis('momentum', cs_quantile(rc.data.ret, bins=2, labels=['low', 'high']))
-rc.add_axis('surge', ts_any(rc.data.ret > 0.3, window=252))  # Boolean
+rc.add_data('size', cs_quantile(rc.data.mcap, bins=3, labels=['small', 'mid', 'big']))
+rc.add_data('momentum', cs_quantile(rc.data.ret, bins=2, labels=['low', 'high']))
+rc.add_data('surge', ts_any(rc.data.ret > 0.3, window=252))  # Boolean
 
 # 4. 셀렉터로 Boolean 마스크 생성
 mask_long = (rc.axis.size['small'] & rc.axis.momentum['high'] & rc.axis.surge)
@@ -118,11 +189,11 @@ my_alpha = rc.data.my_alpha  # xarray.DataArray (T, N)
 
 **구현 요구사항:**
 
-- `rc.add_axis()`: Expression을 `rc.rules[축이름]`에 등록
-- `rc.axis.size['small']`:
-  1. `rc.rules['size']` Expression 조회
-  2. `Equals(expression, 'small')` 새 Expression 생성
-  3. `EvaluateVisitor`로 평가하여 Boolean mask (T, N) 반환
+- `rc.add_data('size', expr)`: Expression을 평가하고 `rc.db.assign({'size': result})`로 data_vars에 추가
+- `rc.axis.size['small']`: 
+  1. `AxisAccessor`가 `rc.db['size']`에 접근
+  2. `AxisSelector.__getitem__('small')`이 `(rc.db['size'] == 'small')`을 반환
+  3. 표준 xarray 불리언 인덱싱, Expression 생성 없음
 - `rc[mask] = value`: `xr.where(mask, value, rc.db[current_canvas])`로 할당
 
 ### 3.2.4. Interface C: Selective Traceability (Integer-Based Steps)
@@ -305,7 +376,7 @@ class CsQuantile(Expression):
     data: Expression  # 버킷화할 데이터 (e.g., Field('market_cap'))
     bins: int  # 버킷 개수
     labels: List[str]  # 레이블 리스트 (길이 = bins)
-    group_by: Optional[str] = None  # 종속 정렬용: axis 이름 참조
+    group_by: Optional[str] = None  # 종속 정렬용: axis 이름 (string), pandas.groupby처럼
     mask: Optional[Expression] = None  # 로우레벨 필터링용: Boolean Expression
     
     def accept(self, visitor: Visitor):
@@ -316,10 +387,16 @@ class CsQuantile(Expression):
 
 ```python
 def visit_cs_quantile(self, node: CsQuantile) -> xr.DataArray:
-    """cs_quantile 평가: 독립/종속 정렬 및 마스크 지원."""
+    """
+    cs_quantile 평가: 독립/종속 정렬 및 마스크 지원.
     
-    # 1. 데이터 평가
+    중요: 종속 정렬은 xarray.groupby().apply()의 표준 패턴을 사용합니다.
+    """
+    
+    # 1. 데이터 평가 및 타입 검사 (MVP: DataPanel만 허용)
     data = node.data.accept(self)  # (T, N) DataArray
+    if not self._is_data_panel(data):
+        raise TypeError(f"cs_quantile requires DataPanel, got {type(data)}")
     
     # 2. 마스크 처리 (옵션)
     if node.mask is not None:
@@ -330,10 +407,10 @@ def visit_cs_quantile(self, node: CsQuantile) -> xr.DataArray:
     if node.group_by is None:
         return self._quantile_independent(data, node.bins, node.labels)
     
-    # 3-B. 종속 정렬 (group_by 지정)
+    # 3-B. 종속 정렬 (group_by 지정 - xarray.groupby 활용)
     else:
-        group_expr = self._rc.rules[node.group_by]
-        group_labels = group_expr.accept(self)  # (T, N) Categorical
+        # group_by는 문자열 (axis 이름)
+        group_labels = self._rc.db[node.group_by]  # rc.db에서 직접 조회
         return self._quantile_grouped(data, group_labels, node.bins, node.labels)
 
 def _quantile_independent(self, data: xr.DataArray, bins: int, labels: List[str]) -> xr.DataArray:
@@ -345,22 +422,32 @@ def _quantile_independent(self, data: xr.DataArray, bins: int, labels: List[str]
 
 def _quantile_grouped(self, data: xr.DataArray, groups: xr.DataArray, 
                       bins: int, labels: List[str]) -> xr.DataArray:
-    """각 그룹 내에서 독립적으로 quantile 계산."""
-    result = xr.full_like(data, fill_value='', dtype=object)
+    """
+    각 그룹 내에서 독립적으로 quantile 계산 (xarray.groupby 활용).
     
-    for group_label in groups.unique():
-        # 해당 그룹에 속하는 항목들 선택
-        group_mask = (groups == group_label)
-        group_data = data.where(group_mask, np.nan)
-        
-        # 그룹 내 quantile 계산
-        group_quantiles = self._quantile_independent(group_data, bins, labels)
-        
-        # 결과 병합
-        result = xr.where(group_mask, group_quantiles, result)
+    이것이 xarray.groupby().apply()의 표준 사용 패턴입니다.
+    """
+    
+    def quantile_function(group_data: xr.DataArray) -> xr.DataArray:
+        """각 그룹에 적용할 quantile 함수"""
+        # group_data는 해당 그룹('small' 또는 'big')에 속하는 데이터만 포함
+        return self._quantile_independent(group_data, bins, labels)
+    
+    # xarray.groupby().apply() - 표준 패턴
+    result = data.groupby(groups).apply(quantile_function)
     
     return result
 ```
+
+**핵심 구현 사항:**
+
+1. **타입 검사:** MVP에서는 `DataPanel` 타입만 허용 (`_is_data_panel()` 헬퍼 사용)
+2. **독립 정렬:** 전체 유니버스 대상 quantile 계산
+3. **종속 정렬:** `xarray.groupby().apply(quantile_function)` 사용
+   - `group_by`는 문자열로 받아 `rc.db[group_by]`에서 레이블 조회
+   - `.apply()`에 커스텀 quantile 함수 전달
+   - xarray가 자동으로 그룹별 결과를 병합
+4. **마스크:** `data.where(mask, np.nan)`로 필터링
 
 ### 3.3.3. 사용 예시 비교
 
