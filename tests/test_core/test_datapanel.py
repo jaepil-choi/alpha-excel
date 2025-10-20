@@ -142,3 +142,4 @@ class TestDataPanel:
         assert 'var_1' in panel.db.data_vars
         assert 'var_2' in panel.db.data_vars
 
+
