@@ -102,6 +102,36 @@ class EvaluateVisitor:
         self._cache_result(f"Field_{node.name}", result)
         return result
     
+    def visit_add_one(self, node) -> xr.DataArray:
+        """Visit AddOne node: add 1 to child expression result.
+        
+        This is a mock operator to demonstrate depth-first traversal.
+        It first evaluates the child expression (depth-first), then
+        adds 1 to the result.
+        
+        Args:
+            node: AddOne expression node with 'child' attribute
+        
+        Returns:
+            xarray.DataArray with child result + 1
+        
+        Example:
+            >>> expr = AddOne(Field('returns'))
+            >>> result = expr.accept(visitor)
+            >>> # Step 0: Field('returns')
+            >>> # Step 1: AddOne (returns + 1)
+        """
+        # Depth-first: evaluate child first
+        child_result = node.child.accept(self)
+        
+        # Apply operation
+        result = child_result + 1
+        
+        # Cache this step
+        self._cache_result("AddOne", result)
+        
+        return result
+    
     def _cache_result(self, name: str, result: xr.DataArray):
         """Cache result with current step number.
         
@@ -137,4 +167,5 @@ class EvaluateVisitor:
             >>> print(name)  # 'Field_returns'
         """
         return self._cache[step]
+
 
