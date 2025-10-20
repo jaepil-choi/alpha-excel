@@ -25,8 +25,27 @@ PRD의 요구사항(F1, F2, F3)을 구현하기 위해 **퍼사드(Facade)**, **
 
 * **C. `Visitor` 패턴: 실행 및 추적 (Visitor) 👨‍🍳**
 
-  * **역할:** `Expression` 트리(레시피)를 "방문(visit)"하며 실제 작업을 수행하는 "실행자"입니다. **`Expression` 객체와는 완전히 분리된 별개의 클래스**입니다.
-  * **`EvaluateVisitor`:** `rc` 객체(`rc._evaluator`)가 소유하며, `Expression` 트리를 순회하며 `rc.db`의 데이터를 참조하여 실제 `xarray.DataArray`를 계산합니다.
+  * **역할:** `Expression` 트리(레시피)를 "방문(visit)"하며 **트리 순회 및 상태 수집**을 담당합니다. **`Expression` 객체와는 완전히 분리된 별개의 클래스**입니다.
+  * **`EvaluateVisitor`:** `rc` 객체(`rc._evaluator`)가 소유하며, `Expression` 트리를 순회하며 다음을 수행합니다:
+    1. **트리 순회(Traversal):** 깊이 우선 탐색으로 자식 노드를 먼저 방문
+    2. **계산 위임(Delegation):** 각 연산자의 `compute()` 메서드를 호출하여 실제 계산 수행
+    3. **상태 수집(State Collection):** 중간 결과를 정수 스텝 인덱스와 함께 캐시에 저장
+  * **중요:** Visitor는 **계산 로직을 포함하지 않습니다**. 계산 로직은 각 연산자(`Expression`)가 소유합니다.
+
+* **D. 연산자 책임 분리 (Operator Responsibility)**
+
+  * **설계 원칙:** 각 연산자(`Expression`)는 자신의 계산 로직을 `compute()` 메서드로 캡슐화합니다.
+  * **Visitor의 역할:**
+    - ❌ **하지 않는 것:** 연산자별 계산 로직 구현 (예: rolling window 계산)
+    - ✅ **하는 것:** 트리 순회, 계산 위임, 결과 캐싱
+  * **연산자의 역할:**
+    - ✅ **하는 것:** 자신의 핵심 계산 로직 구현 (`compute()` 메서드)
+    - ✅ **하는 것:** Visitor 인터페이스 제공 (`accept()` 메서드)
+  * **이점:**
+    1. **단일 책임 원칙(SRP):** Visitor는 순회만, 연산자는 계산만
+    2. **테스트 용이성:** `compute()` 메서드를 독립적으로 테스트 가능
+    3. **유지보수성:** Visitor가 연산자 증가에 따라 비대해지지 않음
+    4. **확장성:** 새 연산자 추가 시 Visitor 수정 최소화
 
 ## 2.2. 데이터 모델 아키텍처 (Data Model Architecture)
 

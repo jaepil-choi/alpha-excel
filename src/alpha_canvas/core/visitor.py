@@ -40,17 +40,22 @@ class EvaluateVisitor:
         >>> name, data = visitor.get_cached(0)
     """
     
-    def __init__(self, data_source: xr.Dataset):
-        """Initialize EvaluateVisitor with data source.
+    def __init__(self, data_source: xr.Dataset, data_loader=None):
+        """Initialize EvaluateVisitor with data source and optional data loader.
         
         Args:
             data_source: xarray.Dataset containing all data variables
+            data_loader: Optional DataLoader for loading fields from Parquet
         
         Example:
             >>> ds = xr.Dataset(coords={'time': [...], 'asset': [...]})
             >>> visitor = EvaluateVisitor(ds)
+            >>> 
+            >>> # With data loader
+            >>> visitor = EvaluateVisitor(ds, data_loader)
         """
         self._data = data_source
+        self._data_loader = data_loader
         self._cache: Dict[int, Tuple[str, xr.DataArray]] = {}
         self._step_counter = 0
     
@@ -80,25 +85,40 @@ class EvaluateVisitor:
         return expr.accept(self)
     
     def visit_field(self, node) -> xr.DataArray:
-        """Visit Field node: retrieve data from dataset.
+        """Visit Field node: retrieve from dataset or load from DB.
         
-        This method is called by Field.accept(visitor). It retrieves the
-        named field from the dataset and caches the result.
+        This method first checks if the field exists in the dataset.
+        If not, and a data_loader is available, it loads the field from
+        the database (Parquet file) using the data_loader.
         
         Args:
             node: Field expression node
         
         Returns:
-            xarray.DataArray from dataset
+            xarray.DataArray from dataset or loaded from DB
         
         Raises:
-            KeyError: If field name not found in dataset
+            KeyError: If field name not found in dataset or config
+            RuntimeError: If field not in dataset and no data_loader available
         
         Example:
             >>> field = Field('returns')
             >>> result = field.accept(visitor)  # Calls visit_field
         """
-        result = self._data[node.name]
+        # Check if already in dataset
+        if node.name in self._data:
+            result = self._data[node.name]
+        else:
+            # Load from DB using DataLoader
+            if self._data_loader is None:
+                raise RuntimeError(
+                    f"Field '{node.name}' not found in dataset and no DataLoader available. "
+                    f"Initialize AlphaCanvas with start_date and end_date to enable data loading."
+                )
+            result = self._data_loader.load_field(node.name)
+            # Add to dataset for caching
+            self._data = self._data.assign({node.name: result})
+        
         self._cache_result(f"Field_{node.name}", result)
         return result
     
@@ -129,6 +149,34 @@ class EvaluateVisitor:
         
         # Cache this step
         self._cache_result("AddOne", result)
+        
+        return result
+    
+    def visit_ts_mean(self, node: 'TsMean') -> xr.DataArray:
+        """Visit TsMean node: orchestrate traversal and caching.
+        
+        Visitor's role (3-step pattern):
+        1. Traverse tree (evaluate child)
+        2. Delegate computation to operator
+        3. Cache result
+        
+        The computation logic resides in TsMean.compute(), not here.
+        This follows the Separation of Concerns principle.
+        
+        Args:
+            node: TsMean expression node
+        
+        Returns:
+            DataArray with rolling mean applied (delegated to operator)
+        """
+        # 1. Traversal: evaluate child expression
+        child_result = node.child.accept(self)
+        
+        # 2. Delegation: operator does its own computation
+        result = node.compute(child_result)
+        
+        # 3. State collection: cache result with step counter
+        self._cache_result("TsMean", result)
         
         return result
     

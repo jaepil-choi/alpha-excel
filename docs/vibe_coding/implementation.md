@@ -361,7 +361,194 @@ multi_returns = rc.trace_pnl('multi_factor')
 - 듀얼 인터페이스(Formula + Selector)의 조합으로 복잡한 다차원 팩터 포트폴리오를 간결하게 표현합니다.
 - 레이블 기반 선택(`'small'`, `'q5'`, `'high'`)으로 가독성과 유지보수성을 확보합니다.
 
-## 3.3. Cross-Sectional Quantile 연산자 구현
+## 3.3. 연산자 구현 패턴 (Operator Implementation Pattern)
+
+### 3.3.1. 책임 분리 원칙
+
+**핵심 원칙:** 연산자는 자신의 계산 로직을 소유하고, Visitor는 순회 및 캐싱만 담당합니다.
+
+**잘못된 패턴 (Anti-Pattern):**
+```python
+# ❌ BAD: Visitor가 계산 로직을 포함
+class EvaluateVisitor:
+    def visit_ts_mean(self, node):
+        child_result = node.child.accept(self)
+        # Visitor 안에 rolling 계산 로직이 들어감 (잘못됨!)
+        result = child_result.rolling(time=node.window, min_periods=node.window).mean()
+        self._cache_result("TsMean", result)
+        return result
+```
+
+**올바른 패턴 (Correct Pattern):**
+```python
+# ✅ GOOD: 연산자가 계산 로직을 소유
+@dataclass
+class TsMean(Expression):
+    child: Expression
+    window: int
+    
+    def accept(self, visitor):
+        """Visitor 인터페이스: 순회를 위한 진입점"""
+        return visitor.visit_ts_mean(self)
+    
+    def compute(self, child_result: xr.DataArray) -> xr.DataArray:
+        """핵심 계산 로직: 연산자가 소유"""
+        return child_result.rolling(
+            time=self.window,
+            min_periods=self.window
+        ).mean()
+
+# ✅ GOOD: Visitor는 순회 및 캐싱만 담당
+class EvaluateVisitor:
+    def visit_ts_mean(self, node: TsMean) -> xr.DataArray:
+        """트리 순회 및 상태 수집"""
+        # 1. 순회: 자식 노드 평가
+        child_result = node.child.accept(self)
+        
+        # 2. 계산 위임: 연산자에게 맡김
+        result = node.compute(child_result)
+        
+        # 3. 상태 수집: 결과 캐싱
+        self._cache_result("TsMean", result)
+        
+        return result
+```
+
+### 3.3.2. 연산자 구현 체크리스트
+
+모든 연산자는 다음 구조를 따라야 합니다:
+
+```python
+@dataclass
+class OperatorName(Expression):
+    """연산자 설명.
+    
+    Args:
+        child: 자식 Expression (필요시)
+        param1: 연산자 파라미터 1
+        param2: 연산자 파라미터 2
+    
+    Returns:
+        연산 결과 DataArray
+    """
+    child: Expression  # 자식 노드 (있는 경우)
+    param1: type1      # 연산자 파라미터들
+    param2: type2
+    
+    def accept(self, visitor) -> xr.DataArray:
+        """Visitor 인터페이스."""
+        return visitor.visit_operator_name(self)
+    
+    def compute(self, *inputs: xr.DataArray) -> xr.DataArray:
+        """핵심 계산 로직.
+        
+        Args:
+            *inputs: 자식 노드들의 평가 결과
+        
+        Returns:
+            이 연산의 결과 DataArray
+        
+        Note:
+            이 메서드는 순수 함수여야 합니다 (부작용 없음).
+            Visitor 참조 없이 독립적으로 테스트 가능해야 합니다.
+        """
+        # 실제 계산 로직
+        result = ...  # xarray/numpy 연산
+        return result
+```
+
+**체크리스트:**
+- [ ] `accept()` 메서드: Visitor 인터페이스 제공
+- [ ] `compute()` 메서드: 핵심 계산 로직 캡슐화
+- [ ] `compute()`는 순수 함수 (부작용 없음)
+- [ ] `compute()`는 Visitor 독립적 (직접 테스트 가능)
+- [ ] Docstring으로 Args/Returns 명확히 문서화
+
+### 3.3.3. Visitor 구현 패턴
+
+모든 `visit_*()` 메서드는 동일한 3단계 패턴을 따릅니다:
+
+```python
+def visit_operator_name(self, node: OperatorName) -> xr.DataArray:
+    """연산자 노드 방문: 순회 및 캐싱.
+    
+    Args:
+        node: 연산자 Expression 노드
+    
+    Returns:
+        연산 결과 DataArray
+    """
+    # 1️⃣ 순회(Traversal): 자식 노드들 평가
+    child_result_1 = node.child1.accept(self)  # 깊이 우선
+    child_result_2 = node.child2.accept(self)  # (있는 경우)
+    
+    # 2️⃣ 계산 위임(Delegation): 연산자에게 맡김
+    result = node.compute(child_result_1, child_result_2)
+    
+    # 3️⃣ 상태 수집(State Collection): 결과 캐싱
+    self._cache_result("OperatorName", result)
+    
+    return result
+```
+
+**Visitor의 역할:**
+- ✅ **트리 순회:** 깊이 우선으로 자식 노드 방문
+- ✅ **계산 위임:** `node.compute()`로 계산 맡김
+- ✅ **상태 수집:** 중간 결과를 정수 스텝으로 캐싱
+- ❌ **계산 로직 포함 금지:** rolling, rank, quantile 등의 로직은 연산자에 속함
+
+### 3.3.4. 테스트 전략
+
+**1. 연산자 단위 테스트 (Operator Unit Tests):**
+
+```python
+def test_ts_mean_compute_directly():
+    """TsMean.compute() 메서드를 직접 테스트 (Visitor 없이)."""
+    # 입력 데이터 준비
+    data = xr.DataArray(
+        [[1, 2], [3, 4], [5, 6]],
+        dims=['time', 'asset']
+    )
+    
+    # 연산자 생성
+    operator = TsMean(child=Field('dummy'), window=2)
+    
+    # compute() 직접 호출 (Visitor 우회)
+    result = operator.compute(data)
+    
+    # 검증
+    assert np.isnan(result.values[0, 0])  # 첫 행 NaN
+    assert result.values[1, 0] == 2.0     # mean([1, 3])
+```
+
+**2. 통합 테스트 (Integration Tests):**
+
+```python
+def test_ts_mean_with_visitor():
+    """TsMean이 Visitor와 통합되어 작동하는지 테스트."""
+    ds = xr.Dataset({'returns': data})
+    visitor = EvaluateVisitor(ds)
+    
+    expr = TsMean(child=Field('returns'), window=3)
+    result = visitor.evaluate(expr)
+    
+    # 캐싱 검증
+    assert len(visitor._cache) == 2  # Field + TsMean
+```
+
+### 3.3.5. 이점 요약
+
+| 측면 | 잘못된 패턴 | 올바른 패턴 |
+|------|-------------|-------------|
+| **책임** | Visitor가 모든 계산 담당 | 연산자가 자신의 계산 소유 |
+| **테스트** | Visitor를 통해서만 테스트 | `compute()` 직접 테스트 가능 |
+| **유지보수** | Visitor가 비대해짐 | 각 연산자 독립적 |
+| **확장성** | 새 연산자마다 Visitor 수정 | Visitor 수정 최소화 |
+| **단일 책임** | Visitor가 다중 책임 | 각 클래스 단일 책임 |
+
+---
+
+## 3.4. Cross-Sectional Quantile 연산자 구현
 
 ### 3.3.1. `cs_quantile` Expression 클래스
 
