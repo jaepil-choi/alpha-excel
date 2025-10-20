@@ -7,3 +7,8 @@ environment with transparency at every step of the calculation pipeline.
 
 __version__ = "0.1.0"
 
+from .core.facade import AlphaCanvas
+
+__all__ = ['AlphaCanvas']
+
+

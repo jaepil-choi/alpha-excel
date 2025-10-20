@@ -13,6 +13,7 @@ from .config import ConfigLoader
 from .data_model import DataPanel
 from .expression import Expression
 from .visitor import EvaluateVisitor
+from .data_loader import DataLoader
 
 
 class AlphaCanvas:
@@ -52,6 +53,8 @@ class AlphaCanvas:
     def __init__(
         self,
         config_dir: str = 'config',
+        start_date: str = None,
+        end_date: str = None,
         time_index=None,
         asset_index=None
     ):
@@ -59,14 +62,19 @@ class AlphaCanvas:
         
         Args:
             config_dir: Path to configuration directory (default: 'config')
-            time_index: Time index for panel data (default: 100-day range from 2020-01-01)
-            asset_index: Asset identifiers (default: ASSET_0 to ASSET_49)
+            start_date: Start date for data loading (YYYY-MM-DD format)
+            end_date: End date for data loading (YYYY-MM-DD format)
+            time_index: Time index for panel data (used if start_date/end_date not provided)
+            asset_index: Asset identifiers (used if start_date/end_date not provided)
         
         Example:
-            >>> # With defaults
-            >>> rc = AlphaCanvas()
+            >>> # With date range (loads from Parquet)
+            >>> rc = AlphaCanvas(
+            ...     start_date='2024-01-01',
+            ...     end_date='2024-12-31'
+            ... )
             >>> 
-            >>> # With custom indices
+            >>> # With custom indices (manual setup)
             >>> time_idx = pd.date_range('2021-01-01', periods=252)
             >>> assets = ['AAPL', 'GOOGL', 'MSFT']
             >>> rc = AlphaCanvas(
@@ -78,16 +86,29 @@ class AlphaCanvas:
         # Load configurations
         self._config = ConfigLoader(config_dir)
         
-        # Initialize data panel with default or custom indices
-        if time_index is None:
-            time_index = pd.date_range('2020-01-01', periods=100)
-        if asset_index is None:
-            asset_index = [f'ASSET_{i}' for i in range(50)]
+        # Initialize DataLoader if date range provided
+        if start_date and end_date:
+            self._data_loader = DataLoader(self._config, start_date, end_date)
+            # Lazy panel creation - will be initialized from first data load
+            self._panel = None
+        else:
+            self._data_loader = None
+            # Initialize data panel with default or custom indices
+            if time_index is None:
+                time_index = pd.date_range('2020-01-01', periods=100)
+            if asset_index is None:
+                asset_index = [f'ASSET_{i}' for i in range(50)]
+            
+            self._panel = DataPanel(time_index, asset_index)
         
-        self._panel = DataPanel(time_index, asset_index)
-        
-        # Initialize evaluator with panel's dataset
-        self._evaluator = EvaluateVisitor(self._panel.db)
+        # Initialize evaluator (will be properly set after first data load if lazy)
+        if self._panel is not None:
+            self._evaluator = EvaluateVisitor(self._panel.db, self._data_loader)
+        else:
+            # Create empty dataset for lazy initialization
+            import xarray as xr
+            empty_ds = xr.Dataset()
+            self._evaluator = EvaluateVisitor(empty_ds, self._data_loader)
         
         # Storage for Expression rules
         self.rules = {}
@@ -142,14 +163,61 @@ class AlphaCanvas:
             # Expression path: evaluate and cache rule
             self.rules[name] = data
             result = self._evaluator.evaluate(data)
+            
+            # Lazy panel initialization from first data load
+            if self._panel is None:
+                time_index = result.coords['time'].values
+                asset_index = result.coords['asset'].values
+                self._panel = DataPanel(time_index, asset_index)
+            
             self._panel.add_data(name, result)
             
             # Re-sync evaluator with updated dataset
-            self._evaluator = EvaluateVisitor(self._panel.db)
+            self._evaluator = EvaluateVisitor(self._panel.db, self._data_loader)
         else:
             # Direct injection path
-            self._panel.add_data(name, data)
+            # Lazy panel initialization from first data load
+            if self._panel is None:
+                time_index = data.coords['time'].values
+                asset_index = data.coords['asset'].values
+                self._panel = DataPanel(time_index, asset_index)
             
+            self._panel.add_data(name, data)
+
             # Re-sync evaluator with updated dataset
-            self._evaluator = EvaluateVisitor(self._panel.db)
+            self._evaluator = EvaluateVisitor(self._panel.db, self._data_loader)
+    
+    def ts_mean(self, field_name: str, window: int) -> xr.DataArray:
+        """Convenience helper: compute and return ts_mean immediately.
+        
+        This is Interface A (Excel-like Formula) style for quick computations.
+        The result is evaluated but NOT automatically added to the dataset.
+        
+        Args:
+            field_name: Name of field to compute rolling mean over
+            window: Rolling window size (number of time periods)
+        
+        Returns:
+            DataArray with rolling mean applied
+        
+        Example:
+            >>> # Quick 5-day moving average
+            >>> ma5 = rc.ts_mean('returns', 5)
+            >>> print(ma5)
+            >>>
+            >>> # Can be added to dataset manually
+            >>> rc.add_data('ma5', ma5)
+        
+        Note:
+            For storing the result in the dataset, use:
+            >>> from alpha_canvas.ops.timeseries import TsMean
+            >>> from alpha_canvas.core.expression import Field
+            >>> rc.add_data('ma5', TsMean(Field('returns'), window=5))
+        """
+        from alpha_canvas.ops.timeseries import TsMean
+        from alpha_canvas.core.expression import Field
+        
+        expr = TsMean(child=Field(field_name), window=window)
+        return self._evaluator.evaluate(expr)
+
 

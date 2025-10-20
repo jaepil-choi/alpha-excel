@@ -170,3 +170,4 @@ class TestAlphaCanvas:
         for i in range(5):
             assert f'var_{i}' in rc.db.data_vars
 
+
