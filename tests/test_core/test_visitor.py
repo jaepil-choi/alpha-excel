@@ -149,7 +149,7 @@ class TestEvaluateVisitor:
         visitor = EvaluateVisitor(test_dataset)
         field = Field('nonexistent_field')
         
-        with pytest.raises(KeyError):
+        with pytest.raises(RuntimeError):
             visitor.evaluate(field)
     
     def test_cache_preserves_data(self, test_dataset):
@@ -163,4 +163,5 @@ class TestEvaluateVisitor:
         # Check data is identical (same object reference)
         assert cached_data is result
         np.testing.assert_array_equal(cached_data.values, result.values)
+
 
