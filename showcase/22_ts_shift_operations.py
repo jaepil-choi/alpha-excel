@@ -55,6 +55,11 @@ def main():
     print(f"       Shape: {rc.db['close'].shape}")
     print(f"       Assets: {list(rc.db['close'].coords['asset'].values)}")
     
+    # Show sample data
+    print("\n  Sample Data (first 5 days, first 3 assets):")
+    sample = rc.db['close'].isel(time=slice(0, 5), asset=slice(0, 3))
+    print("\n  " + str(sample.to_pandas()).replace("\n", "\n  "))
+    
     # Section 2: TsDelay - Basic Usage
     print_section("2. TsDelay - Look Back in Time")
     
