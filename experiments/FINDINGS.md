@@ -3680,3 +3680,120 @@ class TsArgMax(Expression):
 - [x] Experiment 26 validates implementation
 
 ---
+
+## Phase 27: Time-Series Two-Input Statistics (Batch 4)
+
+### Experiment 27: Two-Input Statistical Operators
+
+**Date**: 2024-10-24  
+**Status**: ✅ SUCCESS
+
+**Summary**: Implemented and validated 2 two-input statistical operators: TsCorr and TsCovariance. These operators compute rolling Pearson correlation and covariance between two time series, enabling pairs trading, factor analysis, and portfolio risk calculations.
+
+#### Key Discoveries
+
+1. **Pearson Correlation Formula is Core**
+   - **Formula**: `corr(X,Y) = cov(X,Y) / (std(X) * std(Y))`
+   - **Range**: [-1, +1] normalized
+   - **Interpretation**: +1 = perfect positive, -1 = perfect negative, 0 = no linear relationship
+   - **Zero Variance**: If std(X) or std(Y) is zero, correlation is undefined (return NaN)
+
+2. **Covariance Formula**
+   - **Formula**: `cov(X,Y) = E[(X - μ_X)(Y - μ_Y)]`
+   - **Not Normalized**: Depends on input scales
+   - **Sign**: +ve = same direction, -ve = opposite direction
+   - **Relationship**: `cov(X,Y) = corr(X,Y) * std(X) * std(Y)`
+
+3. **Binary Time-Series Pattern**
+   - **Two Expression Children**: `left` and `right` (not child)
+   - **Aligned Windows**: Both inputs must use same window size
+   - **Visitor Support**: Already handles `left/right` pattern (from arithmetic operators)
+   - **compute() Signature**: `def compute(self, left_result, right_result)`
+
+4. **Rolling Window Alignment**
+   - **Both Construct**: `.rolling().construct('window')` on both inputs
+   - **Synchronized**: Windows are automatically aligned by time coordinate
+   - **NaN Propagation**: NaN in either input → NaN output
+   - **Min Periods**: Both use `min_periods=window` for consistent NaN padding
+
+5. **Population vs Sample Statistics**
+   - **Population Formula**: `np.std(ddof=0)` and `np.mean()` (divide by N)
+   - **Consistency**: Matches xarray's default behavior
+   - **Rationale**: For rolling windows, we use all available data in window (population)
+
+#### Use Cases Enabled
+
+1. **Pairs Trading**
+   - Identify co-moving pairs via correlation
+   - Detect breakdowns in correlation structure
+   
+2. **Beta Calculation**
+   - Formula: beta = cov(asset, market) / var(market)
+   - Use TsCovariance for numerator and denominator
+   
+3. **Factor Exposure**
+   - Correlation with factor returns = factor loading
+   - Risk attribution to factors
+   
+4. **Portfolio Risk**
+   - Covariance matrix for variance calculation
+   - Identify uncorrelated assets for diversification
+
+#### Validation Results
+
+**Test 1: Perfect Positive Correlation**
+- Data: X = [1,2,3,4,5], Y = [2,4,6,8,10] (Y = 2*X)
+- Expected: corr = +1.0
+- Actual: corr = +1.0
+- ✓ PASS
+
+**Test 2: Perfect Negative Correlation**
+- Data: X = [10,9,8,7,6], Y = [-10,-9,-8,-7,-6] (Y = -X)
+- Expected: corr = -1.0
+- Actual: corr = -1.0
+- ✓ PASS
+
+**Test 3: Covariance Formula**
+- Verify: cov = corr * std(X) * std(Y)
+- Values: cov = 1.0 * 1.414 * 2.828 = 4.0
+- Actual: cov = 4.0
+- ✓ PASS
+
+**Test 4: Zero Correlation**
+- Data: X increasing, Z alternating [1,-1,1,-1,1]
+- Expected: corr ≈ 0
+- Actual: corr = 0.0
+- ✓ PASS
+
+**Test 5: NaN Propagation**
+- Insert NaN at position 7
+- Windows 8-11: NaN (contain position 7)
+- Windows 6-7: Valid (before NaN)
+- ✓ PASS
+
+#### Lessons Learned
+
+1. **Binary Time-Series Operators**
+   - Pattern: `left/right` children like arithmetic operators
+   - Visitor: Existing infrastructure handles two-input operators
+   - Takeaway: No special visitor logic needed
+
+2. **Edge Case Handling**
+   - Zero Variance: Must check before division
+   - NaN Propagation: Explicit checks cleaner than pandas style
+   - Takeaway: Document edge cases in docstrings
+
+3. **Population vs Sample**
+   - Rolling Windows: Use all data in window (population)
+   - ddof=0: Matches xarray default
+   - Takeaway: Consistency with ecosystem is important
+
+#### Files Modified
+
+- [x] src/alpha_canvas/ops/timeseries.py: Added TsCorr, TsCovariance
+- [x] src/alpha_canvas/ops/__init__.py: Exported new operators
+- [x] timeseries.py module docstring updated
+- [x] Experiment 27 validates implementation
+- [x] FINDINGS.md (this entry)
+
+---

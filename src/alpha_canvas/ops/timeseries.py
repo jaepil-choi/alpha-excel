@@ -25,6 +25,10 @@ Available Operators:
     - TsArgMax: Days ago when maximum occurred
     - TsArgMin: Days ago when minimum occurred
     
+    Two-Input Statistics (Batch 4):
+    - TsCorr: Rolling Pearson correlation
+    - TsCovariance: Rolling covariance
+    
     Boolean Operators:
     - TsAny: Rolling any (boolean aggregation)
 """
@@ -772,6 +776,198 @@ class TsArgMin(Expression):
                 rel_idx = len(window_vals) - 1 - abs_idx
                 
                 result[time_idx, asset_idx] = float(rel_idx)
+        
+        return result
+
+
+@dataclass(eq=False)
+class TsCorr(Expression):
+    """Time-series rolling correlation operator.
+    
+    Computes the rolling Pearson correlation coefficient between two time series.
+    
+    The Pearson correlation measures the strength and direction of the linear
+    relationship between two variables, normalized to [-1, +1]:
+    - corr = +1: Perfect positive linear relationship
+    - corr = -1: Perfect negative linear relationship
+    - corr = 0: No linear relationship
+    
+    Formula: corr(X,Y) = cov(X,Y) / (std(X) * std(Y))
+    
+    This operator is useful for:
+    - Identifying pairs with strong linear relationships
+    - Detecting regime changes in correlation structure
+    - Pairs trading signal generation
+    - Risk factor exposure analysis
+    
+    Args:
+        left: First Expression (X)
+        right: Second Expression (Y)
+        window: Rolling window size (number of time periods)
+    
+    Returns:
+        DataArray with same shape as inputs, containing rolling correlations.
+        First (window-1) rows are NaN due to incomplete windows.
+    
+    NaN Handling:
+        - If either input contains NaN in the window, output is NaN
+        - First (window-1) rows are NaN (incomplete windows)
+        - If std(X) or std(Y) is zero in the window, output is NaN
+    
+    Implementation Notes:
+        - Uses population standard deviation (ddof=0) for consistency with xarray
+        - Manual iteration over windows (clarity over speed)
+        - min_periods=window ensures proper NaN padding
+    """
+    left: Expression
+    right: Expression
+    window: int
+    
+    def accept(self, visitor):
+        return visitor.visit_operator(self)
+    
+    def compute(self, left_result: 'xr.DataArray', right_result: 'xr.DataArray') -> 'xr.DataArray':
+        """Compute rolling Pearson correlation.
+        
+        Args:
+            left_result: First input DataArray (X)
+            right_result: Second input DataArray (Y)
+        
+        Returns:
+            DataArray with rolling correlations
+        """
+        import xarray as xr
+        import numpy as np
+        
+        # Construct rolling windows for both inputs
+        left_windowed = left_result.rolling(time=self.window, min_periods=self.window).construct('window')
+        right_windowed = right_result.rolling(time=self.window, min_periods=self.window).construct('window')
+        
+        # Initialize result with NaN
+        result = xr.full_like(left_result, np.nan, dtype=float)
+        
+        # Compute correlation for each time-asset position
+        for time_idx in range(left_windowed.sizes['time']):
+            for asset_idx in range(left_windowed.sizes['asset']):
+                left_win = left_windowed.isel(time=time_idx, asset=asset_idx).values
+                right_win = right_windowed.isel(time=time_idx, asset=asset_idx).values
+                
+                # Skip if any NaN in either window
+                if np.any(np.isnan(left_win)) or np.any(np.isnan(right_win)):
+                    continue  # Leave as NaN
+                
+                # Compute means
+                mean_left = np.mean(left_win)
+                mean_right = np.mean(right_win)
+                
+                # Compute covariance
+                cov_xy = np.mean((left_win - mean_left) * (right_win - mean_right))
+                
+                # Compute standard deviations (population, ddof=0)
+                std_left = np.std(left_win, ddof=0)
+                std_right = np.std(right_win, ddof=0)
+                
+                # Check for zero variance
+                if std_left == 0 or std_right == 0:
+                    continue  # Leave as NaN (cannot compute correlation)
+                
+                # Compute Pearson correlation
+                corr = cov_xy / (std_left * std_right)
+                
+                result[time_idx, asset_idx] = corr
+        
+        return result
+
+
+@dataclass(eq=False)
+class TsCovariance(Expression):
+    """Time-series rolling covariance operator.
+    
+    Computes the rolling covariance between two time series.
+    
+    Covariance measures how two variables move together:
+    - cov > 0: Variables tend to move in the same direction
+    - cov < 0: Variables tend to move in opposite directions
+    - cov = 0: No linear relationship
+    
+    Unlike correlation, covariance is not normalized and depends on the
+    scales of the input variables.
+    
+    Formula: cov(X,Y) = E[(X - μ_X)(Y - μ_Y)]
+    
+    This operator is useful for:
+    - Portfolio risk calculations (variance-covariance matrix)
+    - Factor model construction
+    - Pairs trading signal strength
+    - Beta calculation (cov(asset, market) / var(market))
+    
+    Args:
+        left: First Expression (X)
+        right: Second Expression (Y)
+        window: Rolling window size (number of time periods)
+    
+    Returns:
+        DataArray with same shape as inputs, containing rolling covariances.
+        First (window-1) rows are NaN due to incomplete windows.
+    
+    NaN Handling:
+        - If either input contains NaN in the window, output is NaN
+        - First (window-1) rows are NaN (incomplete windows)
+    
+    Relationship to Correlation:
+        corr(X,Y) = cov(X,Y) / (std(X) * std(Y))
+        cov(X,Y) = corr(X,Y) * std(X) * std(Y)
+    
+    Implementation Notes:
+        - Uses population formula (divide by N, not N-1)
+        - Manual iteration over windows (clarity over speed)
+        - min_periods=window ensures proper NaN padding
+    """
+    left: Expression
+    right: Expression
+    window: int
+    
+    def accept(self, visitor):
+        return visitor.visit_operator(self)
+    
+    def compute(self, left_result: 'xr.DataArray', right_result: 'xr.DataArray') -> 'xr.DataArray':
+        """Compute rolling covariance.
+        
+        Args:
+            left_result: First input DataArray (X)
+            right_result: Second input DataArray (Y)
+        
+        Returns:
+            DataArray with rolling covariances
+        """
+        import xarray as xr
+        import numpy as np
+        
+        # Construct rolling windows for both inputs
+        left_windowed = left_result.rolling(time=self.window, min_periods=self.window).construct('window')
+        right_windowed = right_result.rolling(time=self.window, min_periods=self.window).construct('window')
+        
+        # Initialize result with NaN
+        result = xr.full_like(left_result, np.nan, dtype=float)
+        
+        # Compute covariance for each time-asset position
+        for time_idx in range(left_windowed.sizes['time']):
+            for asset_idx in range(left_windowed.sizes['asset']):
+                left_win = left_windowed.isel(time=time_idx, asset=asset_idx).values
+                right_win = right_windowed.isel(time=time_idx, asset=asset_idx).values
+                
+                # Skip if any NaN in either window
+                if np.any(np.isnan(left_win)) or np.any(np.isnan(right_win)):
+                    continue  # Leave as NaN
+                
+                # Compute means
+                mean_left = np.mean(left_win)
+                mean_right = np.mean(right_win)
+                
+                # Compute covariance: E[(X - μ_X)(Y - μ_Y)]
+                cov_xy = np.mean((left_win - mean_left) * (right_win - mean_right))
+                
+                result[time_idx, asset_idx] = cov_xy
         
         return result
 
