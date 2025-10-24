@@ -168,6 +168,120 @@ class Expression(ABC):
         from alpha_canvas.ops.logical import Not
         return Not(self)
     
+    # Arithmetic operators
+    def __add__(self, other):
+        """Addition → Add Expression.
+        
+        Args:
+            other: Value or Expression to add
+        
+        Returns:
+            Add Expression (lazy)
+        
+        Example:
+            >>> price = Field('price')
+            >>> adjusted = price + 100  # Add(Field('price'), 100)
+            >>> combined = Field('a') + Field('b')  # Add(Field('a'), Field('b'))
+        """
+        from alpha_canvas.ops.arithmetic import Add
+        return Add(self, other)
+    
+    def __radd__(self, other):
+        """Reverse addition (for 3 + expression)."""
+        from alpha_canvas.ops.arithmetic import Add
+        return Add(self, other)
+    
+    def __sub__(self, other):
+        """Subtraction → Sub Expression.
+        
+        Args:
+            other: Value or Expression to subtract
+        
+        Returns:
+            Sub Expression (lazy)
+        
+        Example:
+            >>> price = Field('price')
+            >>> relative = price - 100  # Sub(Field('price'), 100)
+        """
+        from alpha_canvas.ops.arithmetic import Sub
+        return Sub(self, other)
+    
+    def __rsub__(self, other):
+        """Reverse subtraction (for 3 - expression)."""
+        from alpha_canvas.ops.arithmetic import Sub
+        from alpha_canvas.ops.constants import Constant
+        return Sub(Constant(other), self)
+    
+    def __mul__(self, other):
+        """Multiplication → Mul Expression.
+        
+        Args:
+            other: Value or Expression to multiply
+        
+        Returns:
+            Mul Expression (lazy)
+        
+        Example:
+            >>> returns = Field('returns')
+            >>> pct = returns * 100  # Mul(Field('returns'), 100)
+        """
+        from alpha_canvas.ops.arithmetic import Mul
+        return Mul(self, other)
+    
+    def __rmul__(self, other):
+        """Reverse multiplication (for 3 * expression)."""
+        from alpha_canvas.ops.arithmetic import Mul
+        return Mul(self, other)
+    
+    def __truediv__(self, other):
+        """Division → Div Expression.
+        
+        Args:
+            other: Value or Expression to divide by
+        
+        Returns:
+            Div Expression (lazy)
+        
+        Example:
+            >>> price = Field('price')
+            >>> book = Field('book_value')
+            >>> pbr = price / book  # Div(Field('price'), Field('book_value'))
+        
+        Warning:
+            Division by zero produces inf/nan with RuntimeWarning.
+        """
+        from alpha_canvas.ops.arithmetic import Div
+        return Div(self, other)
+    
+    def __rtruediv__(self, other):
+        """Reverse division (for 3 / expression)."""
+        from alpha_canvas.ops.arithmetic import Div
+        from alpha_canvas.ops.constants import Constant
+        return Div(Constant(other), self)
+    
+    def __pow__(self, other):
+        """Power → Pow Expression.
+        
+        Args:
+            other: Value or Expression (exponent)
+        
+        Returns:
+            Pow Expression (lazy)
+        
+        Example:
+            >>> returns = Field('returns')
+            >>> squared = returns ** 2  # Pow(Field('returns'), 2)
+        """
+        from alpha_canvas.ops.arithmetic import Pow
+        return Pow(self, other)
+    
+    def __rpow__(self, other):
+        """Reverse power (for 3 ** expression)."""
+        from alpha_canvas.ops.arithmetic import Pow
+        from alpha_canvas.ops.constants import Constant
+        return Pow(Constant(other), self)
+    
     def to_dict(self) -> Dict[str, Any]:
         """Serialize Expression to dict (convenience wrapper).
         
