@@ -2746,3 +2746,293 @@ earnings_yield = Inverse(pe_ratio)
 - [ ] Update ac-ops.md Phase 1 status to COMPLETE
 
 ---
+
+## Phase 22: Arithmetic Operators Phase 2-4 (SignedPower, Max, Min, ToNan)
+
+### Experiment 22: Complete Arithmetic Operator Implementation
+
+**Date**: 2025-10-24  
+**Status**: ✅ COMPLETE
+
+**Summary**: Implemented 4 remaining arithmetic operators (SignedPower, Max, Min, ToNan) and refactored visitor architecture to handle group-by operations generically and support variadic operators. All operators integrate seamlessly with existing Expression-Visitor pattern.
+
+#### Key Discoveries
+
+1. **Visitor Refactoring Enables Scalability**
+   - **Problem**: CsQuantile had special-case handling for `group_by` parameter
+   - **Solution**: Extracted group_by logic to be generic for ANY operator with `group_by` attribute
+   - **Benefit**: Future group operators (group_max, group_min, group_mean, etc.) get support automatically
+   - **Pattern**: Check `hasattr(node, 'group_by')` at top of `visit_operator()`, look up from dataset
+   - **Result**: No more operator-specific special cases for group operations
+
+2. **Variadic Pattern is Third Generic Pattern**
+   - **Pattern 1**: Unary (has `child`) → `compute(child_result)`
+   - **Pattern 2**: Binary (has `left`/`right` or `base`/`exponent`) → `compute(left, right?)`
+   - **Pattern 3**: Variadic (has `operands` tuple) → `compute(*operand_results)`
+   - **Key insight**: Variadic is NOT "special" - it's just another pattern in the if/elif chain
+   - **Implementation**: `if hasattr(node, 'operands'): results = [op.accept(self) for op in node.operands]`
+   - **Benefit**: Max/Min get same OUTPUT MASKING + caching as all other operators
+
+3. **SignedPower is Essential for Returns Data**
+   - **Problem**: Regular power `(-9) ** 0.5 = NaN` loses sign information
+   - **Solution**: `sign(x) * |x|^y` preserves direction
+   - **Use case**: Compressing return distributions: SignedPower(returns, 0.5) reduces outliers while keeping long/short signal
+   - **Example**: Input [-9, -4, 0, 4, 9] → Output [-3, -2, 0, 2, 3] (signed square root)
+   - **Alternative**: Regular power produces [NaN, NaN, 0, 2, 3] (direction lost!)
+   - **Finding**: Critical operator for quantitative finance (returns-based alphas)
+
+4. **Max/Min Require Tuple Syntax**
+   - **Syntax**: `Max((a, b, c))` NOT `Max(a, b, c)`
+   - **Reason**: Dataclass field must be single attribute (not *args)
+   - **Validation**: `__post_init__` enforces ≥2 operands
+   - **Implementation**: `operands: tuple[Expression, ...]` then `compute(*operand_results)`
+   - **Common use**: `Max((signal, Constant(0)))` - floor at 0, `Min((signal, Constant(1)))` - cap at 1
+   - **NaN propagation**: `skipna=False` ensures any NaN contaminates result (mathematically correct)
+
+5. **ToNan Provides Bidirectional Conversion**
+   - **Forward mode**: `value → NaN` (mark sentinel values as missing)
+   - **Reverse mode**: `NaN → value` (fill missing with default)
+   - **Use case**: Cleaning: `ToNan(volume, value=0)` marks zero volume as missing
+   - **Use case**: Filling: `ToNan(signal, value=0, reverse=True)` replaces NaN with 0
+   - **Round-trip property**: `ToNan(ToNan(x, v, False), v, True) = x` (verified in experiment)
+   - **Flexibility**: `value` parameter supports any sentinel (-999, 0, etc.)
+
+6. **Composition Works Seamlessly**
+   - **Example 1**: `Max(SignedPower(a, 0.5), Min(b, c))` - complex nested expression
+   - **Example 2**: `Min(Max(signal, lower), upper)` - range limiting
+   - **Finding**: All operators compose without special handling
+   - **Reason**: Tree traversal naturally handles arbitrary nesting
+   - **Benefit**: Users can build complex expressions declaratively
+
+#### Visitor Architecture Evolution
+
+**Before (CsQuantile-specific)**:
+```python
+if isinstance(node, CsQuantile):
+    # Special case: look up group_by field
+    group_labels = self._data[node.group_by] if node.group_by else None
+    result = node.compute(child_result, group_labels)
+```
+
+**After (Generic)**:
+```python
+# Generic: ANY operator can have group_by
+group_labels = None
+if hasattr(node, 'group_by') and node.group_by is not None:
+    group_labels = self._data[node.group_by]
+
+# Then handle different patterns
+if hasattr(node, 'operands'):  # Variadic
+    results = [op.accept(self) for op in node.operands]
+    result = node.compute(*results, group_labels) if group_labels else node.compute(*results)
+elif hasattr(node, 'child'):  # Unary
+    child_result = node.child.accept(self)
+    result = node.compute(child_result, group_labels) if group_labels else node.compute(child_result)
+elif hasattr(node, 'left') and hasattr(node, 'right'):  # Binary
+    # ... (handles Expression vs literal)
+elif hasattr(node, 'base') and hasattr(node, 'exponent'):  # Binary (power-like)
+    # ... (handles Expression vs literal)
+```
+
+**Benefits**:
+- Future group operators automatically supported
+- No operator-specific special cases
+- Clean separation of concerns (pattern matching vs group_by lookup)
+- All patterns share OUTPUT MASKING + caching flow
+
+#### Implementation Patterns
+
+**SignedPower (Binary with base/exponent)**:
+```python
+@dataclass(eq=False)
+class SignedPower(Expression):
+    base: Expression
+    exponent: Union[Expression, Any]
+    
+    def compute(self, base_result: xr.DataArray, exp_result: Any = None) -> xr.DataArray:
+        exponent = exp_result if exp_result is not None else self.exponent
+        sign = xr.ufuncs.sign(base_result)
+        abs_val = xr.ufuncs.fabs(base_result)
+        return sign * (abs_val ** exponent)
+```
+
+**Max/Min (Variadic)**:
+```python
+@dataclass(eq=False)
+class Max(Expression):
+    operands: tuple[Expression, ...]
+    
+    def __post_init__(self):
+        if len(self.operands) < 2:
+            raise ValueError("Max requires at least 2 operands")
+    
+    def compute(self, *operand_results: xr.DataArray) -> xr.DataArray:
+        stacked = xr.concat(operand_results, dim='__operand__')
+        return stacked.max(dim='__operand__', skipna=False)
+```
+
+**ToNan (Unary with optional parameters)**:
+```python
+@dataclass(eq=False)
+class ToNan(Expression):
+    child: Expression
+    value: float = 0.0
+    reverse: bool = False
+    
+    def compute(self, child_result: xr.DataArray) -> xr.DataArray:
+        if not self.reverse:
+            return child_result.where(child_result != self.value, float('nan'))
+        else:
+            return child_result.fillna(self.value)
+```
+
+#### Performance Metrics
+
+**Dataset**: Various sizes tested in experiment
+
+| Operator | Time | Implementation | Notes |
+|----------|------|----------------|-------|
+| SignedPower | <1ms | sign * (abs ** exp) | 3 vectorized ops |
+| Max (3 operands) | <1ms | xr.concat + max | Stacking overhead minimal |
+| Min (3 operands) | <1ms | xr.concat + min | Stacking overhead minimal |
+| ToNan | <1ms | where or fillna | Native xarray methods |
+
+**Conclusion**: All operators have negligible overhead. Variadic operators use stacking but remain fast for reasonable operand counts (<10).
+
+#### Edge Case Validation
+
+**SignedPower**:
+- ✅ `SignedPower(-9, 0.5) = -3` (sign preserved)
+- ✅ `SignedPower(0, 0.5) = 0` (zero stays zero)
+- ✅ `SignedPower(9, 0.5) = 3` (positive works)
+- ✅ `SignedPower(-16, 2) = -256` (works with any exponent)
+- ✅ Expression as exponent works
+
+**Max/Min**:
+- ✅ 2 operands: `Max((a, b))`
+- ✅ 3+ operands: `Max((a, b, c))`
+- ✅ NaN propagation: any NaN → result NaN
+- ✅ Tuple validation: single operand raises ValueError
+- ✅ Mixed types: `Max((Field('x'), Constant(0)))`
+
+**ToNan**:
+- ✅ Forward: 0 → NaN
+- ✅ Reverse: NaN → 0
+- ✅ Round-trip: `forward → reverse = original`
+- ✅ Custom value: `ToNan(x, value=3)` works
+- ✅ Only exact matches converted
+
+**Universe Masking**:
+- ✅ SignedPower respects universe mask
+- ✅ Max respects universe mask
+- ✅ Min respects universe mask
+- ✅ ToNan respects universe mask
+- ✅ OUTPUT MASKING applied automatically
+
+#### Use Case Demonstrations
+
+**SignedPower - Returns Compression**:
+```python
+# Compress returns while preserving long/short direction
+returns = Field('returns')
+compressed = SignedPower(returns, 0.5)  # Signed square root
+# Large returns become smaller, small returns stay small, sign preserved
+```
+
+**Max - Signal Flooring**:
+```python
+# Ensure signal is non-negative (long-only strategy)
+signal = Field('momentum')
+long_only = Max((signal, Constant(0)))  # Floor at 0
+```
+
+**Min - Signal Capping**:
+```python
+# Cap signal at maximum exposure
+signal = Field('value_score')
+capped = Min((signal, Constant(1.0)))  # Cap at 1.0
+```
+
+**Range Limiting**:
+```python
+# Limit signal to [-2, 2] range
+signal = Field('zscore')
+limited = Min((Max((signal, Constant(-2))), Constant(2)))
+```
+
+**ToNan - Data Cleaning**:
+```python
+# Mark zero volume as missing (likely data error)
+volume = Field('volume')
+clean_volume = ToNan(volume, value=0)  # 0 → NaN
+
+# Fill missing prices with previous close
+prices = Field('prices')
+filled = ToNan(prices, value=last_close, reverse=True)  # NaN → value
+```
+
+#### Lessons Learned
+
+1. **Generic Patterns > Special Cases**
+   - Refactoring CsQuantile special case to generic group_by pattern was correct decision
+   - Future group operators get support for free
+   - Visitor stays lean and maintainable
+   - Pattern: "Check attribute, not isinstance()"
+
+2. **Variadic is NOT Special**
+   - Max/Min fit naturally into visitor's pattern matching
+   - `hasattr(node, 'operands')` is sufficient
+   - All operators share OUTPUT MASKING + caching
+   - No need for "special case" section
+
+3. **Tuple Syntax is Clear**
+   - `Max((a, b, c))` makes operand grouping explicit
+   - Prevents ambiguity: `Max(a, b, c)` could be misread
+   - Validation in `__post_init__` catches errors early
+   - Python requires tuple for variadic dataclass fields anyway
+
+4. **SignedPower Fills Critical Gap**
+   - Regular power inadequate for financial data
+   - Sign preservation essential for returns-based signals
+   - Common pattern: compress outliers with SignedPower(x, <1)
+   - Users will heavily rely on this operator
+
+5. **Documentation Prevents Misuse**
+   - Comprehensive docstrings explain edge cases
+   - Examples show common use patterns
+   - Warnings about NaN propagation, memory usage, etc.
+   - "See Also" sections guide users to related operators
+
+6. **Experiment Validates Architecture**
+   - All operators worked on first try after visitor refactoring
+   - Universe masking worked automatically
+   - Composition worked without special handling
+   - Experiment-driven development pays dividends
+
+#### Next Steps
+
+**All Arithmetic Operators Complete** ✅:
+- [x] Phase 1: Unary (Abs, Log, Sign, Inverse)
+- [x] Phase 2: SignedPower
+- [x] Phase 3: Max, Min
+- [x] Phase 4: ToNan
+- [x] Visitor refactoring (generic group_by, variadic pattern)
+- [x] Comprehensive validation (exp_22)
+- [x] Documentation updated
+
+**Future Work**:
+- [ ] Group operators (group_max, group_min, group_mean) - visitor already supports them
+- [ ] Logical operators expansion (if_else, case/when)
+- [ ] Time-series operators expansion
+- [ ] Cross-sectional operators expansion
+- [ ] Showcase examples demonstrating real-world use cases
+
+**Documentation Updates**:
+- [x] FINDINGS.md (this entry)
+- [x] arithmetic.py module docstring updated  
+- [x] ops/__init__.py exports updated
+- [x] Visitor refactored with generic patterns
+- [ ] Update ac-ops.md phases 2-4 to COMPLETE
+- [ ] Create showcase examples
+
+---

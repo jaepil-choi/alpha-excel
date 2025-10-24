@@ -314,10 +314,10 @@ class EvaluateVisitor:
         eliminating code duplication entirely.
         
         Handles multiple operator patterns:
-        - Single child: TsMean, Rank, Not (has 'child' attribute)
-        - Binary: And, Or (has 'left' and 'right' attributes)
-        - Comparison: Equals, GreaterThan (has 'left' and 'right', right may be literal)
-        - CsQuantile: Special case with optional group_by parameter
+        - Single child: TsMean, Rank, Not, Abs, Log (has 'child' attribute)
+        - Binary: And, Or, Add, Mul, SignedPower (has 'left'/'right' or 'base'/'exponent')
+        - Variadic: Max, Min (has 'operands' tuple attribute)
+        - Group operations: CsQuantile, group_* (has optional 'group_by' attribute)
         
         The double masking strategy (Field input + Operator output) creates
         a trust chain where operators trust their input is masked and ensure
@@ -335,47 +335,47 @@ class EvaluateVisitor:
             >>> result = expr.accept(visitor)
             >>> 
             >>> # Binary operator
-            >>> small = Field('size') == 'small'
-            >>> high = Field('value') == 'high'
-            >>> mask = small & high  # And(small, high)
-            >>> result = mask.accept(visitor)
+            >>> expr = SignedPower(Field('returns'), 0.5)
+            >>> result = expr.accept(visitor)
+            >>> 
+            >>> # Variadic operator
+            >>> expr = Max((Field('high'), Field('close'), Field('vwap')))
+            >>> result = expr.accept(visitor)
         """
         from alpha_canvas.core.expression import Expression
-        from alpha_canvas.ops.classification import CsQuantile
         
-        # Special handling for CsQuantile (needs group_by lookup)
-        if isinstance(node, CsQuantile):
-            # 1. Evaluate child
+        # GENERIC GROUP_BY HANDLING: Look up group field if operator has group_by attribute
+        group_labels = None
+        if hasattr(node, 'group_by') and node.group_by is not None:
+            if node.group_by not in self._data:
+                raise ValueError(
+                    f"group_by field '{node.group_by}' not found in dataset"
+                )
+            group_labels = self._data[node.group_by]
+        
+        # 1. TRAVERSAL: Evaluate child/children expressions based on operator pattern
+        if hasattr(node, 'operands'):
+            # Variadic operator (Max, Min) - tuple of Expressions
+            operand_results = [op.accept(self) for op in node.operands]
+            
+            # Pass group_labels if present
+            if group_labels is not None:
+                result = node.compute(*operand_results, group_labels)
+            else:
+                result = node.compute(*operand_results)
+        
+        elif hasattr(node, 'child'):
+            # Single child operator (TsMean, Rank, Not, Abs, Log, CsQuantile)
             child_result = node.child.accept(self)
             
-            # 2. Look up group_by field if specified
-            group_labels = None
-            if node.group_by is not None:
-                if node.group_by not in self._data:
-                    raise ValueError(
-                        f"group_by field '{node.group_by}' not found in dataset"
-                    )
-                group_labels = self._data[node.group_by]
-            
-            # 3. Delegate to compute()
-            result = node.compute(child_result, group_labels)
-            
-            # 4. Apply universe masking
-            if self._universe_mask is not None:
-                result = result.where(self._universe_mask, np.nan)
-            
-            # 5. Cache
-            self._cache_signal_weights_and_returns("CsQuantile", result)
-            return result
-        
-        # 1. Traversal: evaluate child/children expressions
-        if hasattr(node, 'child'):
-            # Single child operator (TsMean, Rank, Not)
-            child_result = node.child.accept(self)
-            result = node.compute(child_result)
+            # Pass group_labels if present (e.g., CsQuantile)
+            if group_labels is not None:
+                result = node.compute(child_result, group_labels)
+            else:
+                result = node.compute(child_result)
         
         elif hasattr(node, 'left') and hasattr(node, 'right'):
-            # Binary operator (And, Or, Equals, GreaterThan, etc.)
+            # Binary operator (And, Or, Equals, GreaterThan, Add, Mul)
             left_result = node.left.accept(self)
             
             # Check if right is Expression or literal
@@ -385,6 +385,18 @@ class EvaluateVisitor:
             else:
                 # Right is literal (e.g., 'small', 5.0)
                 result = node.compute(left_result)
+        
+        elif hasattr(node, 'base') and hasattr(node, 'exponent'):
+            # Binary operator with base/exponent (SignedPower, Pow-like)
+            base_result = node.base.accept(self)
+            
+            # Check if exponent is Expression or literal
+            if isinstance(node.exponent, Expression):
+                exp_result = node.exponent.accept(self)
+                result = node.compute(base_result, exp_result)
+            else:
+                # Exponent is literal (e.g., 0.5, 2)
+                result = node.compute(base_result)
         
         else:
             # Fallback: assume single child
