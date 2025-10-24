@@ -2489,3 +2489,260 @@ data = ds.load_field('adj_close', '2024-01-01', '2024-01-31')
 10. **TODO**: Eventually integrate DataSource into AlphaCanvas (dependency injection)
 
 ---
+
+## Phase 21: Unary Arithmetic Operators
+
+### Experiment 21: Unary Arithmetic Operators (Abs, Log, Sign, Inverse)
+
+**Date**: 2025-10-24  
+**Status**: ✅ COMPLETE
+
+**Summary**: Implemented and validated four unary arithmetic operators (Abs, Log, Sign, Inverse) following the established architecture pattern. All operators use xarray.ufuncs for optimal performance and integrate seamlessly with the Visitor pattern and universe masking.
+
+#### Key Discoveries
+
+1. **xarray.ufuncs are Perfect for Unary Operations**
+   - **Pattern**: `xr.ufuncs.fabs()`, `xr.ufuncs.log()`, `xr.ufuncs.sign()`
+   - **Performance**: Zero overhead vs direct numpy operations
+   - **Benefit**: Automatic broadcasting, NaN handling, and metadata preservation
+   - **Conclusion**: Use xarray.ufuncs for all mathematical transformations
+
+2. **Edge Case Behavior is Well-Defined**
+   - **Abs**: Negative → Positive, Zero → Zero, NaN → NaN (simple, predictable)
+   - **Log**: Negative → NaN, Zero → -inf, Positive → log(x) (numpy standard)
+   - **Sign**: Negative → -1, Zero → 0, Positive → +1, NaN → NaN (direction extraction)
+   - **Inverse**: Zero → inf, NaN → NaN, Double inverse property holds (1/(1/x) = x)
+   - **Finding**: numpy/xarray edge case handling is mathematically sound and practical
+
+3. **NaN Propagation is Automatic**
+   - All operators propagate NaN through operations
+   - No special handling needed in `compute()` methods
+   - xarray.ufuncs handle NaN consistently across all operators
+   - **Benefit**: Predictable behavior, no surprises
+
+4. **Universe Masking Works Automatically**
+   - Unary operators respect OUTPUT MASKING from Visitor
+   - No manual masking needed in operator implementation
+   - Double masking strategy (INPUT + OUTPUT) ensures safety
+   - **Validation**: Experiment confirms masking works with all four operators
+
+5. **Operator Composition is Seamless**
+   - Complex expressions like `Abs(Log(price))` work without special handling
+   - Visitor handles recursive evaluation naturally
+   - Tree traversal pattern scales to any expression complexity
+   - **Evidence**: `Sign(price - Inverse(price))` composes correctly
+
+6. **Documentation Provides Value**
+   - Comprehensive docstrings clarify edge cases (e.g., log(0) → -inf)
+   - Use case examples help users understand when to apply each operator
+   - "See Also" sections guide users to related operators
+   - **Finding**: Rich documentation prevents misuse and aids discovery
+
+#### Implementation Pattern
+
+**Unary Operator Structure**:
+```python
+@dataclass(eq=False)
+class OperatorName(Expression):
+    """One-line description.
+    
+    Detailed behavior explanation.
+    
+    Args:
+        child: Input Expression
+    
+    Returns:
+        DataArray with result (same shape as input)
+    
+    Example:
+        >>> expr = OperatorName(Field('data'))
+        >>> result = rc.evaluate(expr)
+    
+    Notes:
+        - Edge case 1
+        - Edge case 2
+    """
+    child: Expression
+    
+    def accept(self, visitor):
+        return visitor.visit_operator(self)
+    
+    def compute(self, child_result: xr.DataArray) -> xr.DataArray:
+        return xr.ufuncs.function_name(child_result)
+```
+
+**Key Characteristics**:
+- Single `child` parameter (not `left`/`right`)
+- `accept()` delegates to generic `visit_operator()`
+- `compute()` takes single `child_result` argument
+- Uses `xr.ufuncs` for vectorized operations
+- No manual masking or special handling
+
+#### Performance Metrics
+
+**Dataset**: (3, 7) test matrix with various edge cases
+
+| Operator | Compute Time | Overhead vs Direct | Notes |
+|----------|--------------|-------------------|-------|
+| Abs | <1ms | Negligible | Pure `xr.ufuncs.fabs()` |
+| Log | <1ms | Negligible | Handles warnings naturally |
+| Sign | <1ms | Negligible | Simple direction extraction |
+| Inverse | <1ms | Negligible | Standard division (1.0 / x) |
+
+**Conclusion**: Zero meaningful overhead vs direct xarray operations. Expression tree traversal dominates runtime for complex expressions.
+
+#### Edge Case Validation
+
+**Abs Operator**:
+- ✅ `abs(-5) = 5`
+- ✅ `abs(0) = 0`
+- ✅ `abs(5) = 5`
+- ✅ `abs(NaN) = NaN`
+
+**Log Operator**:
+- ✅ `log(1) = 0`
+- ✅ `log(0) = -inf` (with warning)
+- ✅ `log(-1) = NaN` (with warning)
+- ✅ `log(NaN) = NaN`
+
+**Sign Operator**:
+- ✅ `sign(-5) = -1`
+- ✅ `sign(0) = 0`
+- ✅ `sign(5) = 1`
+- ✅ `sign(NaN) = NaN`
+
+**Inverse Operator**:
+- ✅ `1/(-5) = -0.2`
+- ✅ `1/(0) = inf`
+- ✅ `1/(5) = 0.2`
+- ✅ `1/NaN = NaN`
+- ✅ `1/(1/x) = x` (double inverse property)
+
+#### Visitor Integration
+
+All operators work through generic `visit_operator()` pattern:
+
+```python
+# In EvaluateVisitor.visit_operator():
+elif hasattr(node, 'child'):
+    child_result = node.child.accept(self)
+    result = node.compute(child_result)
+```
+
+**Benefits**:
+- No per-operator visitor methods needed
+- Visitor stays lean and scalable
+- Operator owns compute logic (testable in isolation)
+- Generic traversal handles all operator types
+
+#### Architecture Compliance
+
+**✅ All Checklist Items Met**:
+- ✅ `accept()` delegates to `visitor.visit_operator()`
+- ✅ `compute()` contains pure computation logic
+- ✅ No direct Visitor reference in compute
+- ✅ OUTPUT MASKING by Visitor (not operator)
+- ✅ Type hints for all parameters
+- ✅ `eq=False` in `@dataclass`
+- ✅ NaN propagation documented
+- ✅ `compute()` testable in isolation
+- ✅ Pure function (no side effects)
+
+#### Use Cases Demonstrated
+
+**Abs** - Magnitude-based signals:
+```python
+# Volatility signal (symmetrical)
+deviation = price - vwap
+volatility = Abs(deviation)
+```
+
+**Log** - Normalizing skewed distributions:
+```python
+# Log-returns (more symmetric than simple returns)
+log_returns = Log(price / TsDelay(price, 1))
+
+# Normalize market cap
+log_mcap = Log(Field('market_cap'))
+```
+
+**Sign** - Direction extraction:
+```python
+# Binary momentum signal
+direction = Sign(Field('returns'))  # -1, 0, or +1
+
+# Long/short from complex signal
+signal = Sign(momentum_factor)
+```
+
+**Inverse** - Ratio inversion:
+```python
+# P/E ratio → Earnings yield
+pe_ratio = price / earnings
+earnings_yield = Inverse(pe_ratio)
+```
+
+#### Lessons Learned
+
+1. **Always Use Expression-Visitor Pattern (CRITICAL)**
+   - ❌ **NEVER** call `operator.compute(data)` directly in experiments
+   - ✅ **ALWAYS** use `visitor.evaluate(Expression)` instead
+   - **Why**: Direct `compute()` bypasses universe masking, caching, and visitor lifecycle
+   - **How**: Create Dataset → Create Visitor → Create Expression → evaluate()
+   - **Finding**: Initial experiment called `compute()` directly (architectural violation)
+
+2. **xarray.ufuncs are the Right Abstraction**
+   - Handle all edge cases correctly
+   - Preserve coordinates and metadata
+   - Zero performance overhead
+   - Consistent API across operations
+
+3. **Generic Visitor Pattern Scales**
+   - Adding 4 operators required zero Visitor changes
+   - `hasattr(node, 'child')` check is sufficient
+   - Pattern will scale to 50+ operators without complexity growth
+
+4. **Documentation Matters for Edge Cases**
+   - Users need to know `log(0) → -inf` vs `log(-1) → NaN`
+   - Examples clarify when to use each operator
+   - Comprehensive docstrings prevent misuse
+
+5. **Experiment-First Validates Design**
+   - All operators worked on first try (no bugs found)
+   - Edge cases validated before production use
+   - Terminal output provides audit trail
+
+6. **Composition Just Works**
+   - `Abs(Log(price))` required no special handling
+   - Tree traversal handles arbitrary nesting
+   - Visitor pattern pays dividends for complex expressions
+
+#### Next Steps
+
+**Phase 1 Complete** ✅:
+- [x] Abs, Log, Sign, Inverse implemented
+- [x] Unit tests pass (direct compute validation)
+- [x] Integration tests pass (Visitor + universe masking)
+- [x] Edge cases validated
+- [x] Experiment documented
+
+**Phase 2 Next** 🔨:
+- [ ] Implement `SignedPower(base, exponent)` (HIGH priority)
+- [ ] Validate sign preservation across edge cases
+- [ ] Compare with regular power (show sign loss)
+- [ ] Document use case: returns compression with direction preservation
+
+**Phase 3 Planned** 📋:
+- [ ] Implement `Max(operands)` and `Min(operands)` (MEDIUM priority)
+- [ ] Solve variadic args challenge (tuple-based solution)
+- [ ] Visitor special case for tuple evaluation
+- [ ] Validate xr.concat + max/min strategy
+
+**Documentation Updates**:
+- [x] FINDINGS.md (this entry)
+- [x] arithmetic.py module docstring updated
+- [x] ops/__init__.py exports updated
+- [ ] Showcase example (TODO: create showcase/21_arithmetic_unary.py)
+- [ ] Update ac-ops.md Phase 1 status to COMPLETE
+
+---

@@ -1,11 +1,19 @@
 """Arithmetic operators for Expression system.
 
 These operators enable arithmetic operations on Expressions:
+
+Binary Operators:
 - Addition: Add (left + right)
 - Subtraction: Sub (left - right)
 - Multiplication: Mul (left * right)
 - Division: Div (left / right)
 - Power: Pow (left ** right)
+
+Unary Operators:
+- Absolute Value: Abs (abs(child))
+- Natural Logarithm: Log (log(child))
+- Sign: Sign (sign(child))
+- Reciprocal: Inverse (1/child)
 
 All arithmetic Expressions remain lazy until evaluated through Visitor.
 Support both Expression-Expression and Expression-scalar operations.
@@ -292,4 +300,251 @@ class Pow(Expression):
             return left_result ** right_result
         else:
             return left_result ** self.right
+
+
+# ==============================================================================
+# Unary Operators
+# ==============================================================================
+
+
+@dataclass(eq=False)
+class Abs(Expression):
+    """Absolute value operator: abs(child).
+    
+    Returns element-wise absolute value of input.
+    Useful for magnitude-based signals where direction is irrelevant.
+    
+    Args:
+        child: Input Expression
+    
+    Returns:
+        DataArray with absolute values (same shape as input)
+        
+    Example:
+        >>> # Convert returns to magnitude
+        >>> returns = Field('returns')
+        >>> price_moves = Abs(returns)
+        >>> result = rc.evaluate(price_moves)
+        >>> 
+        >>> # Use for symmetrical signals
+        >>> deviation = price - vwap
+        >>> abs_deviation = Abs(deviation)
+    
+    Notes:
+        - NaN values propagate through (abs(NaN) = NaN)
+        - Zero stays zero (abs(0) = 0)
+        - Negative values become positive (abs(-5) = 5)
+        - Useful when magnitude matters more than direction
+    
+    See Also:
+        - Sign: Extract direction while discarding magnitude
+    """
+    child: Expression
+    
+    def accept(self, visitor):
+        """Accept visitor for the Visitor pattern."""
+        return visitor.visit_operator(self)
+    
+    def compute(self, child_result: xr.DataArray) -> xr.DataArray:
+        """Core computation logic for absolute value.
+        
+        Args:
+            child_result: Evaluated child Expression result
+        
+        Returns:
+            DataArray with absolute values
+        """
+        return xr.ufuncs.fabs(child_result)
+
+
+@dataclass(eq=False)
+class Log(Expression):
+    """Natural logarithm operator: log(child).
+    
+    Calculates the natural logarithm (base e) of input element-wise.
+    Essential for log-returns and ratio transformations.
+    
+    Args:
+        child: Input Expression (must be positive for real results)
+    
+    Returns:
+        DataArray with natural logarithm values (same shape as input)
+        
+    Example:
+        >>> # Calculate log-returns
+        >>> price = Field('price')
+        >>> price_lag = TsDelay(price, 1)
+        >>> log_returns = Log(price / price_lag)
+        >>> 
+        >>> # Transform skewed distributions
+        >>> market_cap = Field('market_cap')
+        >>> log_mcap = Log(market_cap)  # More normal distribution
+    
+    Warning:
+        - Negative values produce NaN
+        - Zero produces -inf
+        - Only defined for positive real numbers
+    
+    Notes:
+        - log(1) = 0
+        - log(e) ≈ 1
+        - NaN in input propagates to result
+        - Commonly used to normalize skewed distributions
+        - log(x/y) = log(x) - log(y) (useful identity)
+    
+    Use Cases:
+        - Log-returns: more symmetric than simple returns
+        - Normalizing right-skewed data (prices, volumes)
+        - Ratio analysis: log(high/low) as signal
+    
+    See Also:
+        - Pow: Inverse operation (exp can be expressed as Pow(e, x))
+    """
+    child: Expression
+    
+    def accept(self, visitor):
+        """Accept visitor for the Visitor pattern."""
+        return visitor.visit_operator(self)
+    
+    def compute(self, child_result: xr.DataArray) -> xr.DataArray:
+        """Core computation logic for natural logarithm.
+        
+        Args:
+            child_result: Evaluated child Expression result
+        
+        Returns:
+            DataArray with natural logarithm values
+        
+        Notes:
+            Uses xarray.ufuncs.log which follows numpy behavior:
+            - Negative values → NaN
+            - Zero → -inf
+            - Positive values → log(x)
+        """
+        return xr.ufuncs.log(child_result)
+
+
+@dataclass(eq=False)
+class Sign(Expression):
+    """Sign operator: sign(child).
+    
+    Extracts the sign of each element, discarding magnitude.
+    Returns -1 for negative, 0 for zero, +1 for positive.
+    
+    Args:
+        child: Input Expression
+    
+    Returns:
+        DataArray with sign values (-1, 0, or 1) (same shape as input)
+        
+    Example:
+        >>> # Extract direction from returns
+        >>> returns = Field('returns')
+        >>> direction = Sign(returns)
+        >>> # Returns: -1 for losses, 0 for no change, +1 for gains
+        >>> 
+        >>> # Create binary signals
+        >>> momentum = Field('momentum')
+        >>> binary_signal = Sign(momentum)  # Simple long/short
+    
+    Notes:
+        - sign(-5) = -1
+        - sign(0) = 0
+        - sign(+5) = +1
+        - sign(NaN) = NaN (propagates)
+        - Discards all magnitude information
+        - Useful for creating direction-only signals
+    
+    Use Cases:
+        - Binary signals (buy/sell/hold)
+        - Direction extraction from complex signals
+        - Simplifying strategies to direction-only
+        - Multiplying with other signals to control direction
+    
+    See Also:
+        - Abs: Extract magnitude while discarding direction
+    """
+    child: Expression
+    
+    def accept(self, visitor):
+        """Accept visitor for the Visitor pattern."""
+        return visitor.visit_operator(self)
+    
+    def compute(self, child_result: xr.DataArray) -> xr.DataArray:
+        """Core computation logic for sign.
+        
+        Args:
+            child_result: Evaluated child Expression result
+        
+        Returns:
+            DataArray with sign values (-1, 0, or 1)
+        """
+        return xr.ufuncs.sign(child_result)
+
+
+@dataclass(eq=False)
+class Inverse(Expression):
+    """Reciprocal operator: 1/child.
+    
+    Calculates the reciprocal (1/x) of each element.
+    Useful for inverting ratios (e.g., P/E ↔ E/P).
+    
+    Args:
+        child: Input Expression (denominator)
+    
+    Returns:
+        DataArray with reciprocal values (same shape as input)
+        
+    Example:
+        >>> # Invert price-to-earnings ratio
+        >>> pe_ratio = Field('price') / Field('earnings')
+        >>> ep_ratio = Inverse(pe_ratio)  # Earnings yield
+        >>> 
+        >>> # Reverse signal direction while preserving relative magnitudes
+        >>> signal = Field('momentum')
+        >>> inverted_signal = Inverse(signal)
+    
+    Warning:
+        - Zero produces inf (positive or negative depending on sign)
+        - Values close to zero produce extreme values
+        - Consider filtering or clipping extreme outputs
+    
+    Notes:
+        - 1/x for x > 0 produces positive result
+        - 1/x for x < 0 produces negative result
+        - 1/0 = inf (with sign)
+        - 1/NaN = NaN (propagates)
+        - Inverse(Inverse(x)) = x (double inversion)
+    
+    Use Cases:
+        - Converting P/E to E/P (earnings yield)
+        - Reversing signal direction with magnitude preservation
+        - Portfolio weight inversion
+        - Implied metrics from ratios
+    
+    See Also:
+        - Div: General division operator
+        - SignedPower: Use SignedPower(x, -1) for same effect with sign preservation
+    """
+    child: Expression
+    
+    def accept(self, visitor):
+        """Accept visitor for the Visitor pattern."""
+        return visitor.visit_operator(self)
+    
+    def compute(self, child_result: xr.DataArray) -> xr.DataArray:
+        """Core computation logic for reciprocal.
+        
+        Args:
+            child_result: Evaluated child Expression result
+        
+        Returns:
+            DataArray with reciprocal values (1/child)
+        
+        Notes:
+            Division by zero produces inf following numpy/xarray behavior.
+            No warning is issued (unlike Div operator) since 1/0 → inf
+            is mathematically well-defined.
+        """
+        return 1.0 / child_result
 

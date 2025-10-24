@@ -13,7 +13,7 @@ This module contains all operator implementations organized by category:
 from .timeseries import TsMean, TsAny
 from .crosssection import Rank
 from .logical import Equals, NotEquals, GreaterThan, LessThan, GreaterOrEqual, LessOrEqual, And, Or, Not
-from .arithmetic import Add, Sub, Mul, Div, Pow
+from .arithmetic import Add, Sub, Mul, Div, Pow, Abs, Log, Sign, Inverse
 from .classification import CsQuantile
 from .constants import Constant
 
@@ -22,6 +22,7 @@ __all__ = [
     'Equals', 'NotEquals', 'GreaterThan', 'LessThan', 'GreaterOrEqual', 'LessOrEqual',
     'And', 'Or', 'Not',
     'Add', 'Sub', 'Mul', 'Div', 'Pow',
+    'Abs', 'Log', 'Sign', 'Inverse',
     'CsQuantile',
     'Constant'
 ]
