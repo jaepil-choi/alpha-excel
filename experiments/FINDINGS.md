@@ -3797,3 +3797,156 @@ class TsArgMax(Expression):
 - [x] FINDINGS.md (this entry)
 
 ---
+
+## Phase 28: Time-Series Special Statistics (Batch 5)
+
+### Experiment 28: Special Statistical Operators
+
+**Date**: 2024-10-24  
+**Status**: ✅ SUCCESS
+
+**Summary**: Implemented and validated 2 special statistical operators: TsCountNans and TsRank. TsCountNans counts NaN values for data quality monitoring, while TsRank computes normalized ranks [0,1] for momentum and mean-reversion signals. This completes the time-series operator implementation (13 operators total).
+
+#### Key Discoveries
+
+1. **TsCountNans Implementation is Simple**
+   - **Formula**: `isnull().astype(float).rolling().sum()`
+   - **Efficiency**: Leverages xarray's optimized rolling operations
+   - **Output**: Integer count (0 to window)
+   - **No NaN Propagation**: Counts NaN, doesn't propagate them
+
+2. **TsRank Normalization**
+   - **Formula**: `rank = count(values < current) / (valid_count - 1)`
+   - **Range**: [0.0, 1.0] where 0=lowest, 0.5=median, 1=highest
+   - **Current Value**: Always included in ranking calculation
+   - **Single Value**: Returns 0.5 (neutral)
+
+3. **Tie Handling Strategy**
+   - **Strict Inequality**: Uses `<` not `<=`
+   - **Lower Bound**: Conservative ranking
+   - **Example**: [1,2,3,3,3] with current=3 → count=2 (only values 1,2 are < 3) → rank=2/4=0.5
+
+4. **NaN Exclusion from Ranking**
+   - **Valid Values Only**: `valid_vals = window_vals[~np.isnan(window_vals)]`
+   - **Current NaN**: Output is NaN (cannot rank)
+   - **Window NaN**: Excluded from both counting and normalization
+
+5. **Use Cases Enabled**
+   - **TsCountNans**: Data quality monitoring, signal validity, trading filters
+   - **TsRank**: Time-series momentum, mean reversion, breakout detection
+   - **Comparison**: TsRank (time) vs Rank (cross-section)
+
+#### Implementation Patterns
+
+**TsCountNans** (Simple):
+```python
+@dataclass(eq=False)
+class TsCountNans(Expression):
+    child: Expression
+    window: int
+    
+    def compute(self, child_result: xr.DataArray):
+        is_nan = child_result.isnull().astype(float)
+        return is_nan.rolling(time=self.window, min_periods=self.window).sum()
+```
+
+**TsRank** (Manual Iteration):
+```python
+@dataclass(eq=False)
+class TsRank(Expression):
+    child: Expression
+    window: int
+    
+    def compute(self, child_result: xr.DataArray):
+        windowed = child_result.rolling(...).construct('window')
+        result = xr.full_like(child_result, np.nan, dtype=float)
+        
+        for time_idx, asset_idx:
+            window_vals = windowed.isel(...).values
+            current = window_vals[-1]
+            
+            if np.isnan(current):
+                continue
+            
+            valid_vals = window_vals[~np.isnan(window_vals)]
+            if len(valid_vals) <= 1:
+                result[...] = 0.5
+                continue
+            
+            rank = np.sum(valid_vals < current)
+            result[...] = rank / (len(valid_vals) - 1)
+        
+        return result
+```
+
+#### Validation Results
+
+**Test 1-3: TsCountNans**
+- ✓ Single NaN counting (window [1,2,NaN,4,5] → 1)
+- ✓ Multiple NaN counting (window [NaN,NaN,8,9,10] → 2)
+- ✓ xarray implementation matches manual
+
+**Test 4-5: TsRank Extremes**
+- ✓ Highest rank=1.0 (monotonic increasing, current=max)
+- ✓ Lowest rank=0.0 (monotonic decreasing, current=min)
+
+**Test 6-7: TsRank Edge Cases**
+- ✓ NaN excluded from ranking (valid only)
+- ✓ Ties handled via strict <
+
+**Test 8: xarray Implementation**
+- ✓ Matches manual calculation
+
+#### Use Cases Demonstrated
+
+1. **Data Quality Monitoring (TsCountNans)**
+   - Count missing data points
+   - Filter signals by data completeness
+   - Calculate data coverage percentage
+
+2. **Time-Series Momentum (TsRank)**
+   - High rank (>0.8) = recent strength
+   - Low rank (<0.2) = recent weakness
+   - Rank=1.0 = new high (breakout)
+
+3. **Mean Reversion Signals (TsRank)**
+   - Extreme ranks (>0.95 or <0.05) = reversal candidates
+   - Compare to historical distribution
+
+4. **Time vs Cross-Sectional Comparison**
+   - TsRank: Rank within time window (momentum)
+   - Rank (cross-section): Rank across assets (relative strength)
+
+#### Lessons Learned
+
+1. **TsCountNans is Elegant**
+   - Leverages xarray's rolling operations
+   - No manual iteration needed
+   - Takeaway: Use built-in operators when possible
+
+2. **Rank Normalization Matters**
+   - [0,1] range enables thresholding (>0.8, <0.2)
+   - 0.5 neutral point for single-value edge case
+   - Takeaway: Normalize to interpretable ranges
+
+3. **Tie Handling Must Be Consistent**
+   - Strict < gives lower bound (conservative)
+   - Alternative: Use <= for upper bound
+   - Takeaway: Document tie behavior clearly
+
+4. **NaN Handling Flexibility**
+   - TsCountNans: Counts NaN (useful)
+   - TsRank: Excludes NaN (necessary)
+   - Takeaway: Different operators need different NaN strategies
+
+#### Files Modified
+
+- [x] src/alpha_canvas/ops/timeseries.py: Added TsCountNans, TsRank
+- [x] src/alpha_canvas/ops/__init__.py: Exported new operators
+- [x] timeseries.py module docstring updated
+- [x] Experiment 28 validates implementation
+- [x] FINDINGS.md (this entry)
+
+**Completion Note**: This concludes the time-series operator implementation plan. **13 operators implemented across 5 batches**.
+
+---

@@ -29,6 +29,10 @@ Available Operators:
     - TsCorr: Rolling Pearson correlation
     - TsCovariance: Rolling covariance
     
+    Special Statistics (Batch 5):
+    - TsCountNans: Count NaN values in rolling window
+    - TsRank: Normalized rank of current value in window (0-1)
+    
     Boolean Operators:
     - TsAny: Rolling any (boolean aggregation)
 """
@@ -968,6 +972,185 @@ class TsCovariance(Expression):
                 cov_xy = np.mean((left_win - mean_left) * (right_win - mean_right))
                 
                 result[time_idx, asset_idx] = cov_xy
+        
+        return result
+
+
+@dataclass(eq=False)
+class TsCountNans(Expression):
+    """Time-series NaN counting operator.
+    
+    Counts the number of NaN values in a rolling time window.
+    
+    This operator is useful for:
+    - Data quality monitoring (detecting missing data)
+    - Signal validity checking (insufficient data warnings)
+    - Conditional logic (only trade when data is complete)
+    - Data coverage analysis across assets
+    
+    Args:
+        child: Expression to count NaN values in
+        window: Rolling window size (number of time periods)
+    
+    Returns:
+        DataArray with same shape as input, containing NaN counts.
+        First (window-1) rows are NaN due to incomplete windows.
+        Values are integers (0 to window).
+        
+    Examples:
+        >>> # Count missing prices in 20-day window
+        >>> nan_count = rc.ts_count_nans(rc.data['close'], window=20)
+        >>> 
+        >>> # Only trade when data is complete
+        >>> complete_data = nan_count == 0
+        >>> signal = rc.rank(rc.data['momentum']) & complete_data
+        
+        >>> # Detect data quality issues
+        >>> data_quality = 1 - (nan_count / 20)  # % of valid data
+    
+    NaN Handling:
+        - Counts NaN values, does not propagate them
+        - First (window-1) rows are NaN (incomplete windows)
+        - Result is always a valid number (0 to window) for complete windows
+    
+    Implementation Notes:
+        - Uses isnull().astype(float).rolling().sum()
+        - Efficient: leverages xarray's optimized rolling operations
+        - min_periods=window ensures proper NaN padding
+    """
+    child: Expression
+    window: int
+    
+    def accept(self, visitor):
+        return visitor.visit_operator(self)
+    
+    def compute(self, child_result: 'xr.DataArray') -> 'xr.DataArray':
+        """Count NaN values in rolling window.
+        
+        Args:
+            child_result: Input DataArray
+        
+        Returns:
+            DataArray with NaN counts (integers)
+        """
+        import xarray as xr
+        
+        # Convert boolean NaN mask to float for summation
+        is_nan = child_result.isnull().astype(float)
+        
+        # Sum NaN indicators over rolling window
+        nan_count = is_nan.rolling(time=self.window, min_periods=self.window).sum()
+        
+        return nan_count
+
+
+@dataclass(eq=False)
+class TsRank(Expression):
+    """Time-series rolling rank operator.
+    
+    Computes the normalized rank of the current value within a rolling window.
+    
+    The rank is normalized to [0, 1] where:
+    - 0.0 = Current value is the lowest in the window
+    - 0.5 = Current value is the median
+    - 1.0 = Current value is the highest in the window
+    
+    Rank calculation: rank = count(values < current) / (valid_count - 1)
+    
+    This operator is useful for:
+    - Momentum signals (high rank = recent strength)
+    - Mean reversion (extreme ranks suggest reversal)
+    - Relative strength across time (vs. cross-sectional rank)
+    - Breakout detection (rank = 1.0 = new high)
+    
+    Args:
+        child: Expression to rank
+        window: Rolling window size (number of time periods)
+    
+    Returns:
+        DataArray with same shape as input, containing normalized ranks [0, 1].
+        First (window-1) rows are NaN due to incomplete windows.
+        
+    Examples:
+        >>> # Time-series momentum: high rank = recent strength
+        >>> ts_momentum = rc.ts_rank(rc.data['close'], window=20)
+        >>> strong_momentum = ts_momentum > 0.8  # In top 20% of window
+        
+        >>> # Mean reversion: extreme ranks
+        >>> overbought = ts_momentum > 0.95  # At/near high
+        >>> oversold = ts_momentum < 0.05    # At/near low
+        
+        >>> # Compare time-series vs cross-sectional rank
+        >>> ts_rank = rc.ts_rank(rc.data['returns'], window=20)
+        >>> cs_rank = rc.rank(rc.data['returns'])  # Rank across assets
+    
+    NaN Handling:
+        - If current value is NaN, output is NaN
+        - NaN values in window are excluded from ranking
+        - If only one valid value in window, returns 0.5
+        - First (window-1) rows are NaN (incomplete windows)
+    
+    Tie Handling:
+        - Uses strict inequality (< not <=) for counting
+        - This gives lower bound ranking (conservative)
+        - Example: [1,2,3,3,3] with current=3 → rank=2/4=0.5
+    
+    Implementation Notes:
+        - Manual iteration for clarity (research-grade)
+        - Uses .rolling().construct('window') for window access
+        - min_periods=window ensures proper NaN padding
+    """
+    child: Expression
+    window: int
+    
+    def accept(self, visitor):
+        return visitor.visit_operator(self)
+    
+    def compute(self, child_result: 'xr.DataArray') -> 'xr.DataArray':
+        """Compute rolling rank of current value.
+        
+        Args:
+            child_result: Input DataArray
+        
+        Returns:
+            DataArray with normalized ranks [0, 1]
+        """
+        import xarray as xr
+        import numpy as np
+        
+        # Construct rolling windows
+        windowed = child_result.rolling(time=self.window, min_periods=self.window).construct('window')
+        
+        # Initialize result with NaN
+        result = xr.full_like(child_result, np.nan, dtype=float)
+        
+        # Compute rank for each time-asset position
+        for time_idx in range(windowed.sizes['time']):
+            for asset_idx in range(windowed.sizes['asset']):
+                window_vals = windowed.isel(time=time_idx, asset=asset_idx).values
+                
+                # Current value is the last in the window
+                current = window_vals[-1]
+                
+                # If current is NaN, skip (leave as NaN)
+                if np.isnan(current):
+                    continue
+                
+                # Get valid values (exclude NaN)
+                valid_vals = window_vals[~np.isnan(window_vals)]
+                
+                # If only one valid value, rank is 0.5 (neutral)
+                if len(valid_vals) <= 1:
+                    result[time_idx, asset_idx] = 0.5
+                    continue
+                
+                # Count how many values are strictly less than current
+                rank = np.sum(valid_vals < current)
+                
+                # Normalize to [0, 1]
+                normalized_rank = rank / (len(valid_vals) - 1)
+                
+                result[time_idx, asset_idx] = normalized_rank
         
         return result
 
