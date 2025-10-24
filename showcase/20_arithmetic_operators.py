@@ -52,42 +52,80 @@ print_section("1. Basic Arithmetic with Scalars")
 
 print("\n[Example 1.1] Addition: Field + scalar")
 price = Field('adj_close')
+
+# Show BEFORE
+price_data = rc.evaluate(price)
+print(f"  Expression: Field('adj_close') + 100")
+print(f"  Input shape: {price_data.shape}")
+print(f"  BEFORE (first 3x3):")
+print(price_data.isel(time=slice(0, 3), asset=slice(0, 3)).values)
+
+# Calculate
 adjusted_price = price + 100
 result = rc.evaluate(adjusted_price)
-print(f"  Expression: Field('adj_close') + 100")
-print(f"  Result shape: {result.shape}")
-print(f"  Sample (first 3x3):")
+
+print(f"  AFTER (first 3x3):")
 print(result.isel(time=slice(0, 3), asset=slice(0, 3)).values)
+print(f"  [OK] Added 100 to each element")
 
 print("\n[Example 1.2] Reverse addition: scalar + Field")
 reverse_add = 100 + price
 result = rc.evaluate(reverse_add)
 print(f"  Expression: 100 + Field('adj_close')")
-print(f"  ✓ Commutative: same as Field + 100")
+print(f"  [OK] Commutative: same as Field + 100")
 
 print("\n[Example 1.3] Subtraction: Field - scalar")
-returns_shifted = Field('returns') - 0.001  # Remove 10bps
-result = rc.evaluate(returns_shifted)
+returns = Field('returns')
+
+# Show BEFORE
+returns_data = rc.evaluate(returns)
 print(f"  Expression: Field('returns') - 0.001")
-print(f"  Mean return: {result.mean().values:.6f}")
+print(f"  BEFORE (first 3x3):")
+print(returns_data.isel(time=slice(0, 3), asset=slice(0, 3)).values)
+
+# Calculate
+returns_shifted = returns - 0.001  # Remove 10bps
+result = rc.evaluate(returns_shifted)
+
+print(f"  AFTER (first 3x3):")
+print(result.isel(time=slice(0, 3), asset=slice(0, 3)).values)
+print(f"  Mean BEFORE: {returns_data.mean().values:.6f}")
+print(f"  Mean AFTER:  {result.mean().values:.6f}")
+print(f"  [OK] Subtracted 0.001 from each element")
 
 print("\n[Example 1.4] Reverse subtraction: scalar - Field (non-commutative)")
 inverse_returns = 0 - Field('returns')
 result = rc.evaluate(inverse_returns)
 print(f"  Expression: 0 - Field('returns')")
-print(f"  ✓ Inverts sign of returns")
+print(f"  [OK] Inverts sign of returns")
 
 print("\n[Example 1.5] Multiplication: Convert to percentage")
+print(f"  Expression: Field('returns') * 100")
+print(f"  BEFORE (first 3x3):")
+print(returns_data.isel(time=slice(0, 3), asset=slice(0, 3)).values)
+
+# Calculate
 returns_pct = Field('returns') * 100
 result = rc.evaluate(returns_pct)
-print(f"  Expression: Field('returns') * 100")
-print(f"  Mean return (%): {result.mean().values:.4f}%")
+
+print(f"  AFTER (first 3x3):")
+print(result.isel(time=slice(0, 3), asset=slice(0, 3)).values)
+print(f"  Mean BEFORE: {returns_data.mean().values:.6f}")
+print(f"  Mean AFTER:  {result.mean().values:.4f}%")
+print(f"  [OK] Multiplied by 100 (converted to percentage)")
 
 print("\n[Example 1.6] Division: Scale down")
+print(f"  Expression: Field('adj_close') / 100")
+print(f"  BEFORE (first 3x3):")
+print(price_data.isel(time=slice(0, 3), asset=slice(0, 3)).values)
+
+# Calculate
 scaled_price = Field('adj_close') / 100
 result = rc.evaluate(scaled_price)
-print(f"  Expression: Field('adj_close') / 100")
-print(f"  Mean scaled price: {result.mean().values:.4f}")
+
+print(f"  AFTER (first 3x3):")
+print(result.isel(time=slice(0, 3), asset=slice(0, 3)).values)
+print(f"  [OK] Divided by 100")
 
 print("\n[Example 1.7] Power: Square returns for volatility proxy")
 returns_squared = Field('returns') ** 2
@@ -103,34 +141,50 @@ print(f"  Mean squared return: {result.mean().values:.8f}")
 print_section("2. Expression-Expression Arithmetic")
 
 print("\n[Example 2.1] Addition: Combine two fields")
+print(f"  Expression: Field('adj_close') + Field('volume')")
+print(f"  Field 1 (adj_close, first 3x3):")
+print(price_data.isel(time=slice(0, 3), asset=slice(0, 3)).values)
+
+volume_data = rc.evaluate(Field('volume'))
+print(f"  Field 2 (volume, first 3x3):")
+print(volume_data.isel(time=slice(0, 3), asset=slice(0, 3)).values)
+
 expr = Field('adj_close') + Field('volume')
 result = rc.evaluate(expr)
-print(f"  Expression: Field('adj_close') + Field('volume')")
-print(f"  ✓ Element-wise addition across (T, N) matrices")
+print(f"  RESULT (first 3x3):")
+print(result.isel(time=slice(0, 3), asset=slice(0, 3)).values)
+print(f"  [OK] Element-wise addition across (T, N) matrices")
 
 print("\n[Example 2.2] Subtraction: Daily range")
 # Note: This is for demonstration; real range would be high - low
 expr = Field('adj_close') - Field('volume')
 result = rc.evaluate(expr)
 print(f"  Expression: Field('adj_close') - Field('volume')")
-print(f"  ✓ Element-wise subtraction")
+print(f"  [OK] Element-wise subtraction")
 
 print("\n[Example 2.3] Multiplication: Dollar volume proxy")
+print(f"  Expression: Field('adj_close') * Field('volume')")
+print(f"  Price (first 2x3):")
+print(price_data.isel(time=slice(0, 2), asset=slice(0, 3)).values)
+print(f"  Volume (first 2x3):")
+print(volume_data.isel(time=slice(0, 2), asset=slice(0, 3)).values)
+
 expr = Field('adj_close') * Field('volume')
 result = rc.evaluate(expr)
-print(f"  Expression: Field('adj_close') * Field('volume')")
+print(f"  Dollar Volume (first 2x3):")
+print(result.isel(time=slice(0, 2), asset=slice(0, 3)).values)
 print(f"  Mean dollar volume: {result.mean().values:.2f}")
 
 print("\n[Example 2.4] Division: Price-to-Book ratio (P/B)")
 # For this demo, we'll use volume as a proxy since we don't have book_value
 print(f"  Expression: Field('adj_close') / Field('volume')")
-print(f"  ✓ Calculates ratio field")
+print(f"  [OK] Calculates ratio field")
 
 print("\n[Example 2.5] Power: Relative strength")
 expr = Field('adj_close') ** Field('returns')
 # Note: This creates x^y where both are fields - mathematically valid but unusual
 print(f"  Expression: Field('adj_close') ** Field('returns')")
-print(f"  ✓ Element-wise power operation")
+print(f"  [OK] Element-wise power operation")
 
 
 # ============================================================================
@@ -140,16 +194,29 @@ print(f"  ✓ Element-wise power operation")
 print_section("3. Nested Arithmetic Expressions")
 
 print("\n[Example 3.1] Combined operations: (price + volume) * returns")
+print(f"  Expression: (Field('adj_close') + Field('volume')) * Field('returns')")
+print(f"  Step 1: price (first 2x3):")
+print(price_data.isel(time=slice(0, 2), asset=slice(0, 3)).values)
+print(f"  Step 2: volume (first 2x3):")
+print(volume_data.isel(time=slice(0, 2), asset=slice(0, 3)).values)
+print(f"  Step 3: price + volume (first 2x3):")
+temp = rc.evaluate(Field('adj_close') + Field('volume'))
+print(temp.isel(time=slice(0, 2), asset=slice(0, 3)).values)
+print(f"  Step 4: returns (first 2x3):")
+print(returns_data.isel(time=slice(0, 2), asset=slice(0, 3)).values)
+
 expr = (Field('adj_close') + Field('volume')) * Field('returns')
 result = rc.evaluate(expr)
-print(f"  Expression: (Field('adj_close') + Field('volume')) * Field('returns')")
+print(f"  FINAL: (price + volume) * returns (first 2x3):")
+print(result.isel(time=slice(0, 2), asset=slice(0, 3)).values)
 print(f"  Result shape: {result.shape}")
+print(f"  [OK] Nested operations evaluated step-by-step")
 
 print("\n[Example 3.2] Parentheses control order: price + volume * returns")
 expr = Field('adj_close') + Field('volume') * Field('returns')
 result = rc.evaluate(expr)
 print(f"  Expression: Field('adj_close') + Field('volume') * Field('returns')")
-print(f"  ✓ Python operator precedence: multiplication before addition")
+print(f"  [OK] Python operator precedence: multiplication before addition")
 
 print("\n[Example 3.3] Complex formula: (price * 2 + volume) / 1000")
 expr = (Field('adj_close') * 2 + Field('volume')) / 1000
@@ -179,7 +246,7 @@ price = Field('adj_close')
 momentum = price / 100.0 - 1.0  # Simplified; real impl would use shift
 result = rc.evaluate(momentum)
 print(f"  Expression: Field('adj_close') / 100.0 - 1.0")
-print(f"  ✓ Momentum calculation pattern")
+print(f"  [OK] Momentum calculation pattern")
 
 print("\n[Example 4.2] Volatility: Standard deviation proxy using squared returns")
 returns_sq = Field('returns') ** 2
@@ -209,15 +276,15 @@ print_section("5. Division by Zero Handling")
 
 print("\n[Example 5.1] Division by zero scalar")
 print(f"  Expression: Field('returns') / 0")
-print(f"  ✓ Produces RuntimeWarning")
-print(f"  ✓ Result contains inf/nan following numpy/xarray behavior")
-print(f"  ✓ User can add postprocessing to handle these values")
+print(f"  [OK] Produces RuntimeWarning")
+print(f"  [OK] Result contains inf/nan following numpy/xarray behavior")
+print(f"  [OK] User can add postprocessing to handle these values")
 
 print("\n[Example 5.2] Division by field that might contain zeros")
 print(f"  Expression: Field('adj_close') / Field('volume')")
-print(f"  ✓ Warning issued if volume contains zeros")
-print(f"  ✓ Result propagates inf/nan at those positions")
-print(f"  ✓ Future enhancement: clip/replace utilities")
+print(f"  [OK] Warning issued if volume contains zeros")
+print(f"  [OK] Result propagates inf/nan at those positions")
+print(f"  [OK] Future enhancement: clip/replace utilities")
 
 
 # ============================================================================
@@ -231,7 +298,7 @@ expr = Field('adj_close') * 100 + Field('volume')
 expr_dict = expr.to_dict()
 print(f"  Expression: Field('adj_close') * 100 + Field('volume')")
 print(f"  Serialized type: {expr_dict['type']}")
-print(f"  ✓ Full expression tree preserved in JSON-compatible dict")
+print(f"  [OK] Full expression tree preserved in JSON-compatible dict")
 
 print("\n[Example 6.2] Deserialize and verify")
 from alpha_canvas.core.expression import Expression
@@ -240,14 +307,14 @@ result1 = rc.evaluate(expr)
 result2 = rc.evaluate(reconstructed)
 print(f"  Original result mean: {result1.mean().values:.4f}")
 print(f"  Reconstructed result mean: {result2.mean().values:.4f}")
-print(f"  ✓ Round-trip successful: results identical")
+print(f"  [OK] Round-trip successful: results identical")
 
 print("\n[Example 6.3] Extract dependencies")
 expr = (Field('adj_close') * Field('returns') + Field('volume')) / 100
 deps = expr.get_field_dependencies()
 print(f"  Expression: (Field('adj_close') * Field('returns') + Field('volume')) / 100")
 print(f"  Dependencies: {sorted(deps)}")
-print(f"  ✓ All fields in expression tree extracted")
+print(f"  [OK] All fields in expression tree extracted")
 
 
 # ============================================================================
@@ -260,20 +327,20 @@ print("\n[Example 7.1] Standard Python precedence")
 expr1 = Field('returns') + Field('returns') * 2
 result1 = rc.evaluate(expr1)
 print(f"  Expression: Field('returns') + Field('returns') * 2")
-print(f"  ✓ Evaluates as: returns + (returns * 2)")
+print(f"  [OK] Evaluates as: returns + (returns * 2)")
 
 expr2 = (Field('returns') + Field('returns')) * 2
 result2 = rc.evaluate(expr2)
 print(f"  Expression: (Field('returns') + Field('returns')) * 2")
-print(f"  ✓ Parentheses override precedence")
-print(f"  ✓ Result 1 mean: {result1.mean().values:.6f}")
-print(f"  ✓ Result 2 mean: {result2.mean().values:.6f}")
+print(f"  [OK] Parentheses override precedence")
+print(f"  [OK] Result 1 mean: {result1.mean().values:.6f}")
+print(f"  [OK] Result 2 mean: {result2.mean().values:.6f}")
 
 print("\n[Example 7.2] Power has highest precedence")
 expr = Field('returns') * 2 ** 3
 # Evaluates as: returns * (2 ** 3) = returns * 8
 print(f"  Expression: Field('returns') * 2 ** 3")
-print(f"  ✓ Evaluates as: returns * (2 ** 3) = returns * 8")
+print(f"  [OK] Evaluates as: returns * (2 ** 3) = returns * 8")
 
 
 # ============================================================================
@@ -288,20 +355,20 @@ expr = TsMean(Field('returns') * 100, window=5)  # 5-day MA of pct returns
 result = rc.evaluate(expr)
 print(f"  Expression: TsMean(Field('returns') * 100, window=5)")
 print(f"  Mean value: {result.mean().values:.4f}%")
-print(f"  ✓ Arithmetic inside time-series operators")
+print(f"  [OK] Arithmetic inside time-series operators")
 
 print("\n[Example 8.2] Arithmetic with cross-sectional operators")
 from alpha_canvas.ops.crosssection import Rank
 expr = Rank((Field('adj_close') + Field('volume')) / 2)
 result = rc.evaluate(expr)
 print(f"  Expression: Rank((Field('adj_close') + Field('volume')) / 2)")
-print(f"  ✓ Arithmetic creates composite signal for ranking")
+print(f"  [OK] Arithmetic creates composite signal for ranking")
 
 print("\n[Example 8.3] Arithmetic with comparison operators")
 threshold = Field('returns') ** 2  # Volatility proxy
 mask = threshold > 0.0001  # High volatility stocks
 print(f"  Expression: (Field('returns') ** 2) > 0.0001")
-print(f"  ✓ Arithmetic creates derived field for comparison")
+print(f"  [OK] Arithmetic creates derived field for comparison")
 
 
 # ============================================================================
@@ -311,7 +378,7 @@ print(f"  ✓ Arithmetic creates derived field for comparison")
 print_section("Summary")
 
 print("""
-✓ Arithmetic Operators Implemented:
+[OK] Arithmetic Operators Implemented:
 
 1. Addition (+):
    - Field + scalar: price + 100
@@ -339,7 +406,7 @@ print("""
    - Field ** Field: price ** returns
    - Reverse: 2 ** returns (non-commutative, uses Constant wrapper)
 
-✓ Key Features:
+[OK] Key Features:
 
 - Lazy Evaluation: All operations remain lazy until explicit evaluate()
 - Universe Masking: All arithmetic respects universe through Visitor
@@ -349,14 +416,14 @@ print("""
 - Type Safety: All operators return Expression objects
 - Performance: Leverages xarray/numpy vectorization
 
-✓ Integration:
+[OK] Integration:
 
 - Works with all existing operators (time-series, cross-section, logical)
 - Compatible with comparison operators for creating masks
 - Supports weight scaling and backtesting workflows
 - Full serialization for alpha persistence
 
-✓ Use Cases:
+[OK] Use Cases:
 
 - Derived field calculation (P/B, momentum, volatility)
 - Signal transformation (normalize, scale, combine)
@@ -364,7 +431,7 @@ print("""
 - Alpha formulas (complex mathematical expressions)
 - Data preprocessing (outlier clipping, standardization)
 
-✓ Future Enhancement:
+[OK] Future Enhancement:
 
 Division by zero currently propagates inf/nan with warning.
 Future utilities may include:
@@ -372,7 +439,7 @@ Future utilities may include:
 - safe_div(numerator, denominator, fill_value=0.0)
 - winsorize_div(numerator, denominator, percentile=95)
 
-✓ Test Coverage:
+[OK] Test Coverage:
 
 32 comprehensive tests covering:
 - All 5 operators with scalars and Expressions
@@ -383,7 +450,7 @@ Future utilities may include:
 - Dependency extraction
 - Edge cases (0**0, negative fractional power, operator precedence)
 
-✓ Ready for production use in alpha-canvas!
+[OK] Ready for production use in alpha-canvas!
 """)
 
 print("\n" + "="*80)
