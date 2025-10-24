@@ -3950,3 +3950,269 @@ class TsRank(Expression):
 **Completion Note**: This concludes the time-series operator implementation plan. **13 operators implemented across 5 batches**.
 
 ---
+
+## Phase 29-30: Group Operators (Cross-Sectional)
+
+**Date**: 2024-10-24  
+**Status**: ✅ COMPLETE
+
+### Objective
+
+Implement 4 group operators from WQ BRAIN: GroupMax, GroupMin, GroupNeutralize, GroupRank. These operators perform cross-sectional analysis and transformations within groups of instruments.
+
+### Key Discoveries
+
+#### 1. Group Operations Are Broadcast Aggregations
+
+**Pattern**: Aggregate within group, then broadcast result to all members.
+
+```python
+# Example: GroupMax
+signal = [1, 3, 5, 3, 4, 6, 7]
+group  = [g1, g1, g1, g1, g2, g2, g2]
+
+# Group 1 (first 4): max([1,3,5,3]) = 5
+# Group 2 (last 3): max([4,6,7]) = 7
+# Broadcast to all members:
+result = [5, 5, 5, 5, 7, 7, 7]
+```
+
+**Critical Insight**: All members of a group receive the **same aggregated value**. This is fundamentally different from operations like rank that preserve individual values.
+
+#### 2. Group Operators vs CsQuantile
+
+**Similarity**: Both use `group_by` parameter for group field lookup.
+
+**Difference**:
+- **CsQuantile**: Returns **different labels** per member (categorical)
+- **Group operators**: Return **same aggregated value** per member (numeric)
+
+**Architectural Win**: Generic `group_by` handling in Visitor works for both patterns!
+
+```python
+# In visit_operator() - already implemented
+if hasattr(node, 'group_by') and node.group_by is not None:
+    group_labels = self._data[node.group_by]
+    result = node.compute(child_result, group_labels)
+```
+
+#### 3. NaN Handling Strategy
+
+**Aggregation**: Ignore NaN during computation (use `np.nanmax`, `np.nanmin`, `np.nanmean`).
+
+**Position Preservation**: Preserve NaN in output where input was NaN.
+
+```python
+# Example with NaN
+signal = [1, 3, NaN, 3, 4, 6, 7]
+group  = [g1, g1, g1, g1, g2, g2, g2]
+
+# Aggregation ignores NaN: max([1, 3, NaN, 3]) = 3 (ignoring NaN)
+# But position 2 had NaN → preserve it
+result = [3, 3, NaN, 3, 7, 7, 7]
+```
+
+**Implementation Pattern**:
+```python
+group_max = np.nanmax(data[mask])  # Ignore NaN in aggregation
+result[mask] = group_max
+result[np.isnan(data)] = np.nan  # Preserve NaN positions
+```
+
+#### 4. Universe Masking Interaction
+
+**Critical Behavior**: Excluded positions don't participate in group aggregation.
+
+```python
+# Example
+signal   = [1, 3, 5, 3, 4, 6, 7]
+group    = [g1, g1, g1, g1, g2, g2, g2]
+universe = [T, T, F, T, T, F, T]  # Exclude positions 2, 5
+
+# INPUT MASKING: Positions 2, 5 become NaN before group operation
+# Group 1 in-universe: [1, 3, NaN, 3] → max = 3 (ignoring NaN)
+# Group 2 in-universe: [4, NaN, 7] → max = 7 (ignoring NaN)
+result = [3, 3, NaN, 3, 7, NaN, 7]
+```
+
+**Why This Matters**: Ensures group statistics only reflect investable universe.
+
+#### 5. GroupNeutralize Mathematical Property
+
+**Guarantee**: After neutralization, each group has **exactly zero mean**.
+
+```python
+signal = [1, 3, 5, 3, 4, 6, 7]
+group  = [g1, g1, g1, g1, g2, g2, g2]
+
+# Group 1 mean = (1+3+5+3)/4 = 3.0
+# Group 2 mean = (4+6+7)/3 = 5.667
+
+neutralized = [-2, 0, 2, 0, -1.67, 0.33, 1.33]
+
+# Verification:
+mean([−2, 0, 2, 0]) = 0.0 ✓
+mean([−1.67, 0.33, 1.33]) = 0.0 ✓
+```
+
+**Use Case**: Essential for sector-neutral strategies.
+
+#### 6. GroupRank Normalization
+
+**Pattern**: Rank within group, normalize to [0, 1].
+
+```python
+signal = [1, 3, 5, 3, 4, 6, 7]
+group  = [g1, g1, g1, g1, g2, g2, g2]
+
+# Group 1: [1, 3, 5, 3]
+#   Sorted: [1, 3, 3, 5]
+#   Ranks (0-based): 1→0, 3→1.5 (avg), 5→3
+#   Normalized [0,1]: 0/(4-1)=0, 1.5/(4-1)=0.5, 3/(4-1)=1.0
+#   Result: [0, 0.5, 1.0, 0.5]
+
+# Group 2: [4, 6, 7]
+#   Sorted: [4, 6, 7]
+#   Ranks: 4→0, 6→1, 7→2
+#   Normalized: 0/(3-1)=0, 1/(3-1)=0.5, 2/(3-1)=1.0
+#   Result: [0, 0.5, 1.0]
+
+result = [0.0, 0.5, 1.0, 0.5, 0.0, 0.5, 1.0]
+```
+
+**Tie Handling**: Uses `scipy.stats.rankdata(method='average')`.
+
+**Edge Case**: Single value in group → rank = 0.5 (middle of range).
+
+### Implementation Patterns
+
+#### Cross-Sectional Independence
+
+**Key Pattern**: Process each time period independently.
+
+```python
+def compute(self, child_result, group_labels):
+    result = xr.full_like(child_result, np.nan)
+    
+    # Independent per time
+    for t_idx in range(child_result.sizes['time']):
+        data_slice = child_result.isel(time=t_idx)
+        group_slice = group_labels.isel(time=t_idx)
+        
+        result[t_idx, :] = group_operation(data_slice, group_slice)
+    
+    return result
+```
+
+**Why**: Group statistics should reflect cross-sectional relationships at each point in time.
+
+#### Broadcast Pattern
+
+**Generic Template** for all aggregation operators (Max, Min, Mean):
+
+```python
+def group_aggregate_at_time(data_slice, group_slice):
+    result = xr.full_like(data_slice, np.nan)
+    
+    for group_val in np.unique(group_slice.values):
+        mask = group_slice == group_val
+        group_data = data_slice.where(mask, drop=False)
+        
+        # Aggregate (max, min, mean, etc.)
+        aggregated = group_data.AGG_FUNCTION(skipna=True)
+        
+        # Broadcast to all members
+        result = result.where(~mask, aggregated.values)
+    
+    # Preserve NaN positions
+    result = result.where(~data_slice.isnull())
+    
+    return result
+```
+
+### Performance Notes
+
+**Manual Iteration**: Current implementation uses explicit time loop.
+
+**Why Not Vectorized**: Group operations with broadcasting require per-time logic (groupby limitations in xarray).
+
+**Performance**: Acceptable for research purposes (~ms per time period).
+
+**Future Optimization**: Could explore xarray groupby tricks, but clarity > speed for research code.
+
+### Architecture Integration
+
+**Zero Visitor Changes**: Generic `group_by` handling already implemented for CsQuantile works perfectly for group operators.
+
+**Cache Behavior**: Group field (looked up via `group_by`) is **not cached** in Expression tree (not traversed, only referenced).
+
+**Universe Masking**: Automatic via OUTPUT MASKING in Visitor.
+
+### Use Cases Validated
+
+1. **Group Leaders/Laggards** (GroupMax/Min)
+   - Identify best/worst performers within sectors
+   - Create relative strength indicators
+
+2. **Sector-Neutral Strategies** (GroupNeutralize)
+   - Remove sector bias from signals
+   - Isolate security-specific alpha
+   - Reduce correlation between signals
+
+3. **Within-Group Ranking** (GroupRank)
+   - Rank stocks within sectors (not across entire market)
+   - Balanced signals across industries
+   - Reduce impact of sector-specific outliers
+
+4. **Composition**
+   - Can combine with other operators seamlessly
+   - Example: `GroupNeutralize(TsMean(Field('returns'), 20), group_by='sector')`
+
+### Files Modified
+
+- [x] **NEW**: `src/alpha_canvas/ops/group.py` (4 operators: GroupMax, GroupMin, GroupNeutralize, GroupRank)
+- [x] `src/alpha_canvas/ops/__init__.py`: Export group operators
+- [x] `experiments/exp_29_group_operators.py`: Logic validation (manual)
+- [x] `experiments/exp_30_group_operators_integration.py`: Full Expression-Visitor integration
+- [x] FINDINGS.md (this entry)
+
+### Lessons Learned
+
+1. **Broadcast Aggregations Are a Pattern**
+   - GroupMax, GroupMin follow same template
+   - Only the aggregation function changes
+   - Takeaway: Template-driven design reduces errors
+
+2. **Group Field Is Metadata, Not Data**
+   - Group field referenced by name, not traversed
+   - Not part of Expression tree, not cached
+   - Takeaway: Distinction between data and metadata matters
+
+3. **Universe + Groups = Powerful**
+   - Universe excludes positions **before** group aggregation
+   - Group statistics reflect only investable positions
+   - Takeaway: Double masking strategy extends naturally
+
+4. **Rank Normalization Enables Comparison**
+   - GroupRank [0,1] per group vs Rank [0,1] cross-sectional
+   - Both use same range → easy to combine/compare
+   - Takeaway: Consistent normalization is API design
+
+5. **Generic Visitor Pattern Pays Off**
+   - No visitor changes needed for 4 new operators
+   - `group_by` handling works for multiple use cases
+   - Takeaway: Good abstraction scales effortlessly
+
+### Completion Milestone
+
+**Group Operators Complete**: 4 operators implemented and validated.
+
+**Total Operator Count**: 42 operators
+- Arithmetic: 13
+- Logical: 10
+- Time-Series: 15
+- Group: 4
+
+**Next**: Cross-sectional operators (Scale, Normalize, etc.)
+
+---
