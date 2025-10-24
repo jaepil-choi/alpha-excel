@@ -14,8 +14,8 @@ Alpha-canvas organizes operators into **conceptual categories** inspired by Worl
 
 | Category | Description | Location | Status |
 |----------|-------------|----------|--------|
-| **Arithmetic** | Basic mathematical operations | `ops/arithmetic.py` | ✅ Partial (this document) |
-| **Logical** | Boolean operations, comparisons | `ops/logical.py` | ✅ Implemented |
+| **Arithmetic** | Basic mathematical operations | `ops/arithmetic.py` | ✅ Complete (this document) |
+| **Logical** | Boolean operations, comparisons | `ops/logical.py` | ✅ Complete |
 | **Time Series** | Operations along time dimension | `ops/timeseries.py` | ✅ Implemented |
 | **Cross-Sectional** | Operations across assets at each time | `ops/crosssection.py` | ✅ Implemented |
 | **Classification** | Bucketing/labeling for categorical data | `ops/classification.py` | ✅ Implemented |
@@ -728,7 +728,7 @@ This document defines **Arithmetic Operators** only:
 
 ### What Other Documents Cover
 
-- **Logical Operators** (`ops/logical.py`) - Boolean operations, comparisons
+- **Logical Operators** (`ops/logical.py`) - ✅ Complete: All comparisons (==, !=, >, <, >=, <=), logical (And, Or, Not), and IsNan
 - **Time Series Operators** (`ops/timeseries.py`) - ts_mean, rolling windows, lags
 - **Cross-Sectional Operators** (`ops/crosssection.py`) - rank, scale, normalize
 - **Classification Operators** (`ops/classification.py`) - CsQuantile (bucketing/labeling)
@@ -746,9 +746,9 @@ This document defines **Arithmetic Operators** only:
 
 **Future Work:**
 - Group operators (group_max, group_min, group_mean) - visitor refactoring complete, ready for implementation
-- Logical operators expansion (if_else, case/when)
 - Time-series operators expansion
 - Cross-sectional operators expansion
+- Transformational operators (neutralization, etc.)
 
 ### Success Criteria
 

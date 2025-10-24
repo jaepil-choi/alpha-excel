@@ -3032,7 +3032,234 @@ filled = ToNan(prices, value=last_close, reverse=True)  # NaN → value
 - [x] arithmetic.py module docstring updated  
 - [x] ops/__init__.py exports updated
 - [x] Visitor refactored with generic patterns
-- [ ] Update ac-ops.md phases 2-4 to COMPLETE
+- [x] Update ac-ops.md phases 2-4 to COMPLETE
 - [ ] Create showcase examples
+
+---
+
+## Phase 23: IsNan Logical Operator
+
+### Experiment 23: IsNan Operator Implementation
+
+**Date**: 2025-10-24  
+**Status**: ✅ COMPLETE
+
+**Summary**: Implemented `IsNan` logical operator to complete WQ BRAIN logical operator parity (excluding `if_else` which is replaced by selector interface). Validated critical universe masking behavior: IsNan checks data quality first, then OUTPUT MASKING ensures universe-excluded positions are NaN (not True).
+
+#### Key Discoveries
+
+1. **Universe Masking Order is Critical**
+   - **Architecture**: IsNan.compute() checks for NaN BEFORE Visitor applies OUTPUT MASKING
+   - **Result**: Universe-masked positions → NaN in boolean result (not True)
+   - **Why it matters**: Prevents universe-excluded positions from being counted as "missing data"
+   - **Example**: If position [0, 4] is outside universe, `IsNan(field)[0, 4]` returns NaN (not True)
+   - **Finding**: This is NOT a subtle design decision - it's architecturally critical
+
+2. **If_Else is Obsolete in Alpha-Canvas**
+   - **WQ BRAIN**: `if_else(condition, true_value, false_value)` for conditional logic
+   - **Alpha-canvas**: Use selector interface instead (Pythonic, more powerful)
+   - **Reason**: PRD emphasizes selector interface as key differentiator
+   - **Pattern**:
+     ```python
+     # WQ: if_else(condition, 1.0, -1.0)
+     # Alpha-canvas:
+     signal = Constant(0)
+     signal[condition] = 1.0
+     signal[~condition] = -1.0
+     ```
+   - **Benefit**: More flexible, composable, Pythonic
+
+3. **IsNan Completes Logical Operator Set**
+   - **Already implemented**: All comparison operators (==, !=, >, <, >=, <=)
+   - **Already implemented**: All logical operators (And, Or, Not)
+   - **Missing from WQ**: Only `is_nan()` was missing
+   - **Now complete**: All essential logical operators implemented
+   - **Not implementing**: `if_else` (use selector interface instead)
+
+4. **Composition with Other Logical Operators**
+   - **Pattern**: `~IsNan(field)` creates "has valid data" mask
+   - **Pattern**: `(~IsNan(field1)) & (~IsNan(field2))` finds positions with both fields valid
+   - **Use case**: Data quality filtering before applying operators
+   - **Use case**: Conditional signals with selector interface
+   - **Finding**: Seamlessly integrates with existing And/Or/Not operators
+
+5. **Data Quality Validation Use Case**
+   - **Application**: Identify missing data patterns across time/assets
+   - **Application**: Count missing days per asset
+   - **Application**: Filter assets with incomplete data history
+   - **Application**: Detect delisting events (continuous NaN sequences)
+   - **Pattern**: `IsNan(field).sum(dim='time')` counts missing days per asset
+
+#### Implementation Pattern
+
+```python
+@dataclass(eq=False)
+class IsNan(Expression):
+    """Check for NaN values element-wise.
+    
+    Returns True where input is NaN, False otherwise.
+    Essential for data quality checks and conditional logic.
+    
+    Notes:
+        - Checks data quality BEFORE universe masking is applied to result
+        - Universe-masked positions will be NaN (not True) in final result
+    """
+    child: Expression
+    
+    def accept(self, visitor):
+        return visitor.visit_operator(self)
+    
+    def compute(self, child_result: xr.DataArray) -> xr.DataArray:
+        import xarray as xr
+        return xr.ufuncs.isnan(child_result)
+```
+
+#### Architecture: Universe Masking Flow
+
+**Execution order:**
+1. **Field retrieval**: INPUT MASKING (universe → NaN in field data)
+2. **IsNan.compute()**: Pure NaN check (checks which values are NaN)
+3. **Visitor**: OUTPUT MASKING (universe → NaN in boolean result)
+4. **Result**: Universe-excluded positions are NaN (NOT True)
+
+**Example:**
+```
+Field data:     [1.0, NaN, 3.0, 4.0, 5.0]
+Universe mask:  [T,   T,   T,   F,   F  ]
+After INPUT:    [1.0, NaN, 3.0, NaN, NaN]  (positions 3,4 masked)
+IsNan result:   [F,   T,   F,   T,   T  ]  (pure NaN check)
+After OUTPUT:   [F,   T,   F,   NaN, NaN] (positions 3,4 masked in result)
+                                ^    ^
+                                Universe-masked → NaN (correct!)
+```
+
+#### Edge Case Validation
+
+**Basic NaN detection:**
+- ✅ Correctly identifies NaN values in data
+- ✅ Returns False for valid (non-NaN) values
+- ✅ NaN values propagate correctly
+
+**Universe masking:**
+- ✅ Universe-excluded positions → NaN in result (NOT True)
+- ✅ In-universe NaN values → True (correct detection)
+- ✅ Distinction preserved: data NaN vs universe NaN
+
+**Composition:**
+- ✅ `~IsNan(field)` creates "has valid data" mask
+- ✅ `And(~IsNan(f1), ~IsNan(f2))` finds positions with both valid
+- ✅ Works seamlessly with other logical operators
+
+**Selector interface:**
+- ✅ Generates boolean masks for conditional signals
+- ✅ Pattern: `signal[~IsNan(earnings)] = earnings / price`
+- ✅ Integrates with selector interface philosophy
+
+#### Use Case Demonstrations
+
+**Use Case 1: Data Quality Validation**
+```python
+# Identify missing data
+volume = Field('volume')
+is_missing = IsNan(volume)
+
+# Count missing days per asset
+missing_count = is_missing.sum(dim='time')
+
+# Filter assets with complete data
+complete_data_mask = (missing_count == 0)
+```
+
+**Use Case 2: Conditional Signals with Selector Interface**
+```python
+# Only compute P/E where earnings exist
+signal = Constant(0)
+has_earnings = ~IsNan(Field('earnings'))
+signal[has_earnings] = Field('price') / Field('earnings')
+```
+
+**Use Case 3: Multi-field Validation**
+```python
+# Find positions where ALL fields have valid data
+price_valid = ~IsNan(Field('price'))
+volume_valid = ~IsNan(Field('volume'))
+earnings_valid = ~IsNan(Field('earnings'))
+
+complete_data = price_valid & volume_valid & earnings_valid
+```
+
+**Use Case 4: Delisting Detection**
+```python
+# Identify assets that have been delisted (continuous NaN)
+is_missing = IsNan(Field('price'))
+consecutive_missing = is_missing.rolling(time=20).sum()
+likely_delisted = consecutive_missing >= 20  # 20 consecutive missing days
+```
+
+#### Performance Metrics
+
+**Dataset**: Various sizes tested in experiment
+
+| Test | Time | Notes |
+|------|------|-------|
+| Basic IsNan | <1ms | Pure xarray.ufuncs.isnan() |
+| With universe masking | <1ms | Standard OUTPUT MASKING overhead |
+| Composition (And/Not) | <1ms | Multiple operator evaluations |
+| Data quality aggregation | <5ms | With sum(dim='time') |
+
+**Conclusion**: IsNan has negligible overhead. Uses xarray's optimized isnan() ufunc.
+
+#### Lessons Learned
+
+1. **Universe Masking Order is Architecturally Critical**
+   - User explicitly confirmed: "NOT subtle, very important question"
+   - IsNan checks data quality → Visitor applies OUTPUT MASKING
+   - Universe-excluded positions must be NaN (not True) in result
+   - This prevents confusion between missing data and excluded positions
+
+2. **Selector Interface Replaces if_else**
+   - Alpha-canvas philosophy: explicit, Pythonic, composable
+   - `signal[condition] = value` more powerful than `if_else()`
+   - Aligns with PRD's emphasis on selector interface as key feature
+   - No need to implement WQ's `if_else` operator
+
+3. **IsNan Completes Logical Operator Set**
+   - All comparison operators: ✅ Done
+   - All logical operators: ✅ Done
+   - Utility operator (IsNan): ✅ Done
+   - No further logical operators needed from WQ BRAIN
+
+4. **Data Quality is a First-Class Concern**
+   - IsNan essential for pre-processing checks
+   - Integrates seamlessly with selector interface
+   - Enables sophisticated data quality validation
+   - Critical for production-ready quant research
+
+5. **Documentation Prevents Misuse**
+   - Explicitly documented universe masking behavior
+   - Architecture section explains execution flow
+   - Use case examples show practical patterns
+   - Edge cases thoroughly tested and documented
+
+#### Next Steps
+
+**Logical Operators Complete** ✅:
+- [x] All comparison operators (==, !=, >, <, >=, <=)
+- [x] All logical operators (And, Or, Not)
+- [x] IsNan utility operator
+- [x] Validation experiment (exp_23)
+- [x] Documentation updated
+
+**Future Work**:
+- Time-series operators expansion
+- Cross-sectional operators expansion  
+- Group operators (visitor already supports them)
+- Transformational operators
+
+**Documentation Updates**:
+- [x] FINDINGS.md (this entry)
+- [x] logical.py module docstring updated
+- [x] ops/__init__.py exports updated
+- [x] Experiment validates architecture
 
 ---
