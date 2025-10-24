@@ -122,6 +122,17 @@ class SerializationVisitor:
                 'right_is_expr': right_is_expr
             }
         
+        # Arithmetic operators (binary with special right-hand side handling)
+        elif node_type in ['Add', 'Sub', 'Mul', 'Div', 'Pow']:
+            # Check if right is an Expression or a literal
+            right_is_expr = isinstance(node.right, Expression)
+            return {
+                'type': node_type,
+                'left': node.left.accept(self),
+                'right': node.right.accept(self) if right_is_expr else node.right,
+                'right_is_expr': right_is_expr
+            }
+        
         # Logical operators
         elif node_type == 'And':
             return {
@@ -253,6 +264,42 @@ class DeserializationVisitor:
                     if data['right_is_expr'] else data['right'])
             return LessOrEqual(left=left, right=right)
         
+        # Arithmetic operators
+        elif expr_type == 'Add':
+            from alpha_canvas.ops.arithmetic import Add
+            left = DeserializationVisitor.from_dict(data['left'])
+            right = (DeserializationVisitor.from_dict(data['right']) 
+                    if data['right_is_expr'] else data['right'])
+            return Add(left=left, right=right)
+        
+        elif expr_type == 'Sub':
+            from alpha_canvas.ops.arithmetic import Sub
+            left = DeserializationVisitor.from_dict(data['left'])
+            right = (DeserializationVisitor.from_dict(data['right']) 
+                    if data['right_is_expr'] else data['right'])
+            return Sub(left=left, right=right)
+        
+        elif expr_type == 'Mul':
+            from alpha_canvas.ops.arithmetic import Mul
+            left = DeserializationVisitor.from_dict(data['left'])
+            right = (DeserializationVisitor.from_dict(data['right']) 
+                    if data['right_is_expr'] else data['right'])
+            return Mul(left=left, right=right)
+        
+        elif expr_type == 'Div':
+            from alpha_canvas.ops.arithmetic import Div
+            left = DeserializationVisitor.from_dict(data['left'])
+            right = (DeserializationVisitor.from_dict(data['right']) 
+                    if data['right_is_expr'] else data['right'])
+            return Div(left=left, right=right)
+        
+        elif expr_type == 'Pow':
+            from alpha_canvas.ops.arithmetic import Pow
+            left = DeserializationVisitor.from_dict(data['left'])
+            right = (DeserializationVisitor.from_dict(data['right']) 
+                    if data['right_is_expr'] else data['right'])
+            return Pow(left=left, right=right)
+        
         # Logical operators
         elif expr_type == 'And':
             from alpha_canvas.ops.logical import And
@@ -322,9 +369,10 @@ class DependencyExtractor:
         if node_type in ['TsMean', 'TsAny', 'Rank', 'CsQuantile', 'Not']:
             node.child.accept(self)
         
-        # Binary operators (comparison and logical)
+        # Binary operators (comparison, logical, and arithmetic)
         elif node_type in ['Equals', 'NotEquals', 'GreaterThan', 'LessThan',
-                          'GreaterOrEqual', 'LessOrEqual', 'And', 'Or']:
+                          'GreaterOrEqual', 'LessOrEqual', 'And', 'Or',
+                          'Add', 'Sub', 'Mul', 'Div', 'Pow']:
             node.left.accept(self)
             # Right can be literal or Expression
             if isinstance(node.right, Expression):
