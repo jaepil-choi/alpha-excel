@@ -95,37 +95,28 @@ class GroupMax(Expression):
         Returns:
             DataArray (T, N) with group max broadcast to all members
         """
-        def group_max_at_time(data_slice, group_slice):
-            """Compute group max at single timestep."""
-            result = xr.full_like(data_slice, np.nan, dtype=float)
-            
-            # Iterate over unique groups
-            for group_val in np.unique(group_slice.values):
-                if isinstance(group_val, float) and np.isnan(group_val):
-                    continue  # Skip NaN groups
-                
-                mask = group_slice == group_val
-                group_data = data_slice.where(mask, drop=False)
-                
-                # Compute max ignoring NaN
-                group_max = group_data.max(skipna=True)
-                
-                # Broadcast to all group members
-                result = result.where(~mask, group_max.values)
-            
-            # Preserve NaN in original positions
-            result = result.where(~data_slice.isnull())
-            
-            return result
-        
-        # Apply cross-sectionally (independently per time)
-        result = xr.full_like(child_result, np.nan, dtype=float)
+        # Efficient vectorized implementation using groupby
+        # Process each time period using xarray groupby (not manual loops over groups)
+        result_list = []
         
         for t_idx in range(child_result.sizes['time']):
             data_slice = child_result.isel(time=t_idx)
             group_slice = group_labels.isel(time=t_idx)
             
-            result[t_idx, :] = group_max_at_time(data_slice, group_slice).values
+            # Use groupby.map to broadcast aggregated values back to all members
+            def broadcast_max(group_data):
+                max_val = group_data.max(skipna=True)
+                return xr.full_like(group_data, max_val)
+            
+            time_result = data_slice.groupby(group_slice).map(broadcast_max)
+            result_list.append(time_result)
+        
+        # Combine back into (T, N) array with explicit coordinates
+        result = xr.concat(result_list, dim='time')
+        result = result.assign_coords(time=child_result.time)
+        
+        # Preserve NaN in original positions
+        result = result.where(~child_result.isnull())
         
         return result
 
@@ -185,37 +176,27 @@ class GroupMin(Expression):
         Returns:
             DataArray (T, N) with group min broadcast to all members
         """
-        def group_min_at_time(data_slice, group_slice):
-            """Compute group min at single timestep."""
-            result = xr.full_like(data_slice, np.nan, dtype=float)
-            
-            # Iterate over unique groups
-            for group_val in np.unique(group_slice.values):
-                if isinstance(group_val, float) and np.isnan(group_val):
-                    continue  # Skip NaN groups
-                
-                mask = group_slice == group_val
-                group_data = data_slice.where(mask, drop=False)
-                
-                # Compute min ignoring NaN
-                group_min = group_data.min(skipna=True)
-                
-                # Broadcast to all group members
-                result = result.where(~mask, group_min.values)
-            
-            # Preserve NaN in original positions
-            result = result.where(~data_slice.isnull())
-            
-            return result
-        
-        # Apply cross-sectionally (independently per time)
-        result = xr.full_like(child_result, np.nan, dtype=float)
+        # Efficient vectorized implementation using groupby
+        result_list = []
         
         for t_idx in range(child_result.sizes['time']):
             data_slice = child_result.isel(time=t_idx)
             group_slice = group_labels.isel(time=t_idx)
             
-            result[t_idx, :] = group_min_at_time(data_slice, group_slice).values
+            # Use groupby.map to broadcast aggregated values back to all members
+            def broadcast_min(group_data):
+                min_val = group_data.min(skipna=True)
+                return xr.full_like(group_data, min_val)
+            
+            time_result = data_slice.groupby(group_slice).map(broadcast_min)
+            result_list.append(time_result)
+        
+        # Combine back into (T, N) array with explicit coordinates
+        result = xr.concat(result_list, dim='time')
+        result = result.assign_coords(time=child_result.time)
+        
+        # Preserve NaN in original positions
+        result = result.where(~child_result.isnull())
         
         return result
 
@@ -278,38 +259,27 @@ class GroupNeutralize(Expression):
         Returns:
             DataArray (T, N) with group means subtracted (group mean = 0)
         """
-        def group_neutralize_at_time(data_slice, group_slice):
-            """Neutralize at single timestep."""
-            result = xr.full_like(data_slice, np.nan, dtype=float)
-            
-            # Iterate over unique groups
-            for group_val in np.unique(group_slice.values):
-                if isinstance(group_val, float) and np.isnan(group_val):
-                    continue  # Skip NaN groups
-                
-                mask = group_slice == group_val
-                group_data = data_slice.where(mask, drop=False)
-                
-                # Compute mean ignoring NaN
-                group_mean = group_data.mean(skipna=True)
-                
-                # Subtract mean from all group members
-                neutralized = data_slice - group_mean.values
-                result = result.where(~mask, neutralized.values)
-            
-            # Preserve NaN in original positions
-            result = result.where(~data_slice.isnull())
-            
-            return result
-        
-        # Apply cross-sectionally (independently per time)
-        result = xr.full_like(child_result, np.nan, dtype=float)
+        # Efficient vectorized implementation using groupby
+        result_list = []
         
         for t_idx in range(child_result.sizes['time']):
             data_slice = child_result.isel(time=t_idx)
             group_slice = group_labels.isel(time=t_idx)
             
-            result[t_idx, :] = group_neutralize_at_time(data_slice, group_slice).values
+            # Use groupby.map to broadcast mean and subtract
+            def neutralize(group_data):
+                group_mean = group_data.mean(skipna=True)
+                return group_data - group_mean
+            
+            time_result = data_slice.groupby(group_slice).map(neutralize)
+            result_list.append(time_result)
+        
+        # Combine back into (T, N) array with explicit coordinates
+        result = xr.concat(result_list, dim='time')
+        result = result.assign_coords(time=child_result.time)
+        
+        # Preserve NaN in original positions
+        result = result.where(~child_result.isnull())
         
         return result
 
@@ -373,59 +343,45 @@ class GroupRank(Expression):
         Returns:
             DataArray (T, N) with within-group ranks in [0, 1]
         """
-        def group_rank_at_time(data_slice, group_slice):
-            """Rank within groups at single timestep."""
-            result = xr.full_like(data_slice, np.nan, dtype=float)
+        def rank_within_group(group_data):
+            """Rank values within a group, normalized to [0, 1]."""
+            # Get valid (non-NaN) data
+            valid_mask = ~np.isnan(group_data.values)
+            valid_data = group_data.values[valid_mask]
             
-            # Iterate over unique groups
-            for group_val in np.unique(group_slice.values):
-                if isinstance(group_val, float) and np.isnan(group_val):
-                    continue  # Skip NaN groups
-                
-                mask = group_slice == group_val
-                group_data = data_slice.where(mask, drop=False).values
-                
-                # Get valid (non-NaN) values
-                valid_mask = ~np.isnan(group_data[mask.values])
-                valid_data = group_data[mask.values][valid_mask]
-                
-                if len(valid_data) == 0:
-                    continue  # All NaN, skip
-                
-                # Rank using scipy (1-based) → convert to 0-based
-                ranks = rankdata(valid_data, method='average') - 1
-                
-                # Normalize to [0, 1]
-                if len(ranks) > 1:
-                    normalized_ranks = ranks / (len(ranks) - 1)
-                else:
-                    normalized_ranks = np.array([0.5])  # Single value → 0.5
-                
-                # Place ranks back in result
-                result_array = result.values
-                mask_indices = np.where(mask.values)[0]
-                valid_indices = mask_indices[valid_mask]
-                
-                for i, rank_val in zip(valid_indices, normalized_ranks):
-                    result_array[i] = rank_val
-                
-                result = xr.DataArray(
-                    result_array,
-                    dims=result.dims,
-                    coords=result.coords
-                )
+            if len(valid_data) == 0:
+                return group_data  # All NaN, return as-is
             
-            # NaN already preserved (initialized with NaN)
+            # Rank using scipy (1-based) → convert to 0-based
+            ranks = rankdata(valid_data, method='average') - 1
+            
+            # Normalize to [0, 1]
+            if len(ranks) > 1:
+                normalized_ranks = ranks / (len(ranks) - 1)
+            else:
+                normalized_ranks = np.array([0.5])  # Single value → 0.5
+            
+            # Place ranks back in result
+            result = group_data.copy()
+            result.values[valid_mask] = normalized_ranks
+            
             return result
         
-        # Apply cross-sectionally (independently per time)
-        result = xr.full_like(child_result, np.nan, dtype=float)
+        # Efficient vectorized implementation using groupby
+        result_list = []
         
         for t_idx in range(child_result.sizes['time']):
             data_slice = child_result.isel(time=t_idx)
             group_slice = group_labels.isel(time=t_idx)
             
-            result[t_idx, :] = group_rank_at_time(data_slice, group_slice).values
+            # Use xarray's groupby.map for ranking within each group
+            time_result = data_slice.groupby(group_slice).map(rank_within_group)
+            result_list.append(time_result)
+        
+        # Combine back into (T, N) array with explicit coordinates
+        result = xr.concat(result_list, dim='time')
+        result = result.assign_coords(time=child_result.time)
         
         return result
+
 
