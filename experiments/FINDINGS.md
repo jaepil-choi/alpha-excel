@@ -3501,3 +3501,182 @@ likely_delisted = consecutive_missing >= 20  # 20 consecutive missing days
 - [x] Experiment validates architecture
 
 ---
+
+## Phase 26: Time-Series Index Operations (Batch 3)
+
+### Experiment 26: Index Operations
+
+**Date**: 2024-10-24  
+**Status**: ✅ SUCCESS
+
+**Summary**: Implemented and validated 2 index operators: TsArgMax and TsArgMin. These operators return "days ago" when the maximum/minimum occurred within a rolling window (0 = today, 1 = yesterday, etc.). Critical for identifying breakout/selloff freshness and mean-reversion signals.
+
+#### Key Discoveries
+
+1. **Relative Index Calculation is Core**
+   - **Formula**: `days_ago = window_length - 1 - absolute_idx`
+   - **Meaning**: Converts numpy's absolute index (0=oldest) to "days ago" (0=newest)
+   - **Example**: In window [1,2,3,4,5], max is at abs_idx=4 → days_ago=0 (today)
+   - **Example**: In window [5,4,3,2,1], max is at abs_idx=0 → days_ago=4 (oldest)
+
+2. **xarray .rolling().construct() is Required**
+   - **Method**: `.rolling(time=window, min_periods=window).construct('time_window')`
+   - **Creates**: New dimension 'time_window' with actual window data
+   - **Shape**: (T, N, window) where last dimension is the rolling window
+   - **Enables**: Custom aggregation logic beyond built-in methods (max/min/sum)
+   - **No .apply()**: xarray DataArrayRolling doesn't have .apply() method
+   - **No .reduce()**: .reduce() passes extra kwargs that break custom functions
+
+3. **Manual Iteration is Necessary**
+   - **Pattern**: Iterate over time and asset dimensions explicitly
+   - **Why**: np.nanargmax operates on 1D arrays, can't broadcast over window dimension
+   - **Loop Structure**: `for time_idx, for asset_idx, compute argmax on window_vals`
+   - **Performance**: Acceptable for alpha research (not HFT), clear and maintainable
+
+4. **np.nanargmax/nanargmin Handle NaN Correctly**
+   - **Behavior**: Ignore NaN values, find max/min among valid data
+   - **Edge Case**: All-NaN window → leave result as NaN
+   - **Edge Case**: Empty window → leave result as NaN
+   - **Critical**: Must check `len(window_vals) == 0 or np.all(np.isnan(window_vals))`
+
+5. **Tie Behavior is Important**
+   - **np.argmax behavior**: Returns FIRST occurrence among ties
+   - **Interpretation**: Oldest among tied values
+   - **Example**: Window [1,5,3,5,2] has two 5's at indices 1 and 3
+   - **Result**: argmax returns 1 (oldest '5') → days_ago=3
+   - **Alternative**: For most recent tie, would need custom logic (not implemented)
+
+6. **min_periods=window Ensures Correct NaN Padding**
+   - **First (window-1) values**: NaN (incomplete windows)
+   - **Prevents look-ahead**: Cannot compute argmax without full window
+   - **Consistent**: Same pattern as other rolling operators
+
+#### Implementation Patterns
+
+Both operators follow identical structure:
+
+**TsArgMax**:
+```python
+@dataclass(eq=False)
+class TsArgMax(Expression):
+    child: Expression
+    window: int
+    
+    def compute(self, child_result: xr.DataArray) -> xr.DataArray:
+        import xarray as xr
+        import numpy as np
+        
+        # Create rolling window views
+        windows = child_result.rolling(
+            time=self.window, 
+            min_periods=self.window
+        ).construct('time_window')
+        
+        # Initialize result with NaN
+        result = xr.full_like(windows.isel(time_window=-1), np.nan, dtype=float)
+        
+        # Compute argmax for each window
+        for time_idx in range(windows.sizes['time']):
+            for asset_idx in range(windows.sizes['asset']):
+                window_vals = windows.isel(time=time_idx, asset=asset_idx).values
+                
+                # Handle empty/NaN windows
+                if len(window_vals) == 0 or np.all(np.isnan(window_vals)):
+                    continue
+                
+                # Find argmax and convert to relative index
+                abs_idx = np.nanargmax(window_vals)
+                rel_idx = len(window_vals) - 1 - abs_idx
+                result[time_idx, asset_idx] = float(rel_idx)
+        
+        return result
+```
+
+**TsArgMin**: Identical except uses `np.nanargmin` instead of `np.nanargmax`.
+
+#### Practical Applications
+
+1. **Breakout Detection**
+   ```python
+   # Only trade when high is very recent
+   days_since_high = TsArgMax(Field('close'), 20)
+   fresh_breakout = days_since_high <= 2  # High within last 2 days
+   ```
+
+2. **Mean Reversion**
+   ```python
+   # Look for stocks far from recent high
+   days_since_high = TsArgMax(Field('close'), 20)
+   stale_high = days_since_high > 15  # High was > 15 days ago
+   mean_revert_candidate = stale_high & (price < high_20d * 0.95)
+   ```
+
+3. **Bounce Signals**
+   ```python
+   # Recent low + price recovery
+   days_since_low = TsArgMin(Field('close'), 20)
+   low_20d = TsMin(Field('close'), 20)
+   bounce = (days_since_low <= 3) & (price > low_20d * 1.02)
+   ```
+
+4. **Support/Resistance Age**
+   ```python
+   # How fresh is the support/resistance level?
+   days_to_high = TsArgMax(Field('high'), 60)
+   days_to_low = TsArgMin(Field('low'), 60)
+   # Use to weight importance of levels
+   ```
+
+#### Architectural Implications
+
+**Pattern Established for Custom Aggregations**
+- `.rolling().construct()` is the way to do custom rolling logic
+- Manual iteration is acceptable for alpha research
+- This pattern will be reused for other complex operators (ts_rank, ts_corr, etc.)
+
+**Performance Considerations**
+- Python loops are not ideal for performance
+- But: alpha research prioritizes correctness and clarity
+- Future optimization: Could use numba or cython if needed
+- For now: Clarity > speed
+
+**NaN Handling is Consistent**
+- All rolling operators use `min_periods=window`
+- All use np.nan* functions that ignore NaN
+- Consistent behavior across the operator library
+
+#### Testing Validation
+
+✅ **Relative Index Calculation**: Correct for all window positions  
+✅ **xarray Integration**: .rolling().construct() works as expected  
+✅ **NaN Handling**: Correctly ignores NaN, returns NaN for empty windows  
+✅ **Tie Handling**: Returns first (oldest) occurrence consistently  
+✅ **Multi-Asset**: Independent computation per asset  
+✅ **min_periods**: First (window-1) values are NaN  
+
+#### Lessons Learned
+
+1. **xarray Rolling API Constraints**
+   - **No .apply() method**: Must use .construct() + manual iteration
+   - **Takeaway**: For custom logic, .construct() is the way
+
+2. **Performance vs Clarity Tradeoff**
+   - **Python loops are slow**: But acceptable for research
+   - **Takeaway**: Optimize only if profiling shows bottleneck
+
+3. **Tie Behavior Matters**
+   - **First vs Last**: np.argmax returns first, might want last
+   - **Takeaway**: Document tie behavior clearly in docstrings
+
+4. **Index Semantics are Non-Obvious**
+   - **"Days ago" is clearer**: Than absolute indices
+   - **Takeaway**: Use domain-appropriate naming (0=today, not 0=oldest)
+
+#### Files Modified
+
+- [x] src/alpha_canvas/ops/timeseries.py: Added TsArgMax, TsArgMin
+- [x] src/alpha_canvas/ops/__init__.py: Exported new operators
+- [x] timeseries.py module docstring updated
+- [x] Experiment 26 validates implementation
+
+---

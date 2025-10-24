@@ -21,6 +21,10 @@ Available Operators:
     - TsDelay: Return value from d days ago
     - TsDelta: Difference from d days ago
     
+    Index Operations (Batch 3):
+    - TsArgMax: Days ago when maximum occurred
+    - TsArgMin: Days ago when minimum occurred
+    
     Boolean Operators:
     - TsAny: Rolling any (boolean aggregation)
 """
@@ -576,4 +580,198 @@ class TsDelta(Expression):
             - More efficient than creating TsDelay explicitly
         """
         return child_result - child_result.shift(time=self.window)
+
+
+@dataclass(eq=False)
+class TsArgMax(Expression):
+    """Time-series argmax operator (days ago when maximum occurred).
+    
+    Returns the number of days ago when the rolling maximum value occurred.
+    0 = today (most recent), 1 = yesterday, etc.
+    
+    This operator is useful for:
+    - Identifying how recent a breakout is
+    - Detecting momentum shifts (recent high vs. old high)
+    - Mean reversion signals (time since high)
+    
+    Args:
+        child: Expression to find argmax over
+        window: Rolling window size (number of time periods)
+    
+    Returns:
+        DataArray with same shape as input, containing relative indices.
+        First (window-1) rows are NaN due to incomplete windows.
+        Value range: [0, window-1] where 0 = today, window-1 = oldest in window.
+    
+    Tie Behavior:
+        When multiple values equal the maximum, returns the FIRST occurrence
+        (oldest among ties). This is consistent with numpy.argmax behavior.
+    
+    Example:
+        >>> # Find when 20-day high occurred
+        >>> expr = TsArgMax(child=Field('close'), window=20)
+        >>> # Result: 0 = new high today, 19 = high was 19 days ago
+        
+        >>> # Breakout filter: only trade when high is recent
+        >>> days_since_high = TsArgMax(Field('close'), 20)
+        >>> fresh_breakout = days_since_high <= 2  # High within last 2 days
+    
+    Note:
+        - Uses np.nanargmax to handle NaN values
+        - NaN windows return NaN
+        - Operates independently on each asset
+        - Implementation uses .rolling().construct() + custom function
+    """
+    
+    child: Expression
+    window: int
+    
+    def accept(self, visitor):
+        """Accept visitor for expression tree traversal."""
+        return visitor.visit_operator(self)
+    
+    def compute(self, child_result: 'xr.DataArray') -> 'xr.DataArray':
+        """Core computation logic for time-series argmax.
+        
+        Args:
+            child_result: Input DataArray from child expression evaluation
+        
+        Returns:
+            DataArray with relative indices of maximum values
+        
+        Algorithm:
+            1. Use .rolling().construct() to create window views
+            2. For each window, find argmax (absolute index from start)
+            3. Convert to relative index: days_ago = window_length - 1 - argmax_idx
+            4. Handle NaN windows by returning NaN
+        
+        Note:
+            - Relative index 0 means the max is at the most recent position (today)
+            - Relative index (window-1) means the max is at the oldest position
+        """
+        import xarray as xr
+        import numpy as np
+        
+        # Create rolling window views with new dimension
+        windows = child_result.rolling(time=self.window, min_periods=self.window).construct('time_window')
+        
+        # Create result array filled with NaN
+        result = xr.full_like(windows.isel(time_window=-1), np.nan, dtype=float)
+        
+        # Compute argmax for each window
+        for time_idx in range(windows.sizes['time']):
+            for asset_idx in range(windows.sizes['asset']):
+                window_vals = windows.isel(time=time_idx, asset=asset_idx).values
+                
+                # Check if window has valid data
+                if len(window_vals) == 0 or np.all(np.isnan(window_vals)):
+                    continue  # Leave as NaN
+                
+                # Find argmax (absolute index from start of window)
+                abs_idx = np.nanargmax(window_vals)
+                
+                # Convert to relative index (days ago from end of window)
+                rel_idx = len(window_vals) - 1 - abs_idx
+                
+                result[time_idx, asset_idx] = float(rel_idx)
+        
+        return result
+
+
+@dataclass(eq=False)
+class TsArgMin(Expression):
+    """Time-series argmin operator (days ago when minimum occurred).
+    
+    Returns the number of days ago when the rolling minimum value occurred.
+    0 = today (most recent), 1 = yesterday, etc.
+    
+    This operator is useful for:
+    - Identifying how recent a sell-off is
+    - Detecting support level freshness
+    - Bounce signals (time since low)
+    
+    Args:
+        child: Expression to find argmin over
+        window: Rolling window size (number of time periods)
+    
+    Returns:
+        DataArray with same shape as input, containing relative indices.
+        First (window-1) rows are NaN due to incomplete windows.
+        Value range: [0, window-1] where 0 = today, window-1 = oldest in window.
+    
+    Tie Behavior:
+        When multiple values equal the minimum, returns the FIRST occurrence
+        (oldest among ties). This is consistent with numpy.argmin behavior.
+    
+    Example:
+        >>> # Find when 20-day low occurred
+        >>> expr = TsArgMin(child=Field('close'), window=20)
+        >>> # Result: 0 = new low today, 19 = low was 19 days ago
+        
+        >>> # Bounce signal: low is recent, price recovering
+        >>> days_since_low = TsArgMin(Field('close'), 20)
+        >>> price = Field('close')
+        >>> low_20d = TsMin(price, 20)
+        >>> bounce = (days_since_low <= 3) & (price > low_20d * 1.02)  # 2% above recent low
+    
+    Note:
+        - Uses np.nanargmin to handle NaN values
+        - NaN windows return NaN
+        - Operates independently on each asset
+        - Implementation uses .rolling().construct() + custom function
+    """
+    
+    child: Expression
+    window: int
+    
+    def accept(self, visitor):
+        """Accept visitor for expression tree traversal."""
+        return visitor.visit_operator(self)
+    
+    def compute(self, child_result: 'xr.DataArray') -> 'xr.DataArray':
+        """Core computation logic for time-series argmin.
+        
+        Args:
+            child_result: Input DataArray from child expression evaluation
+        
+        Returns:
+            DataArray with relative indices of minimum values
+        
+        Algorithm:
+            1. Use .rolling().construct() to create window views
+            2. For each window, find argmin (absolute index from start)
+            3. Convert to relative index: days_ago = window_length - 1 - argmin_idx
+            4. Handle NaN windows by returning NaN
+        
+        Note:
+            - Relative index 0 means the min is at the most recent position (today)
+            - Relative index (window-1) means the min is at the oldest position
+        """
+        import xarray as xr
+        import numpy as np
+        
+        # Create rolling window views with new dimension
+        windows = child_result.rolling(time=self.window, min_periods=self.window).construct('time_window')
+        
+        # Create result array filled with NaN
+        result = xr.full_like(windows.isel(time_window=-1), np.nan, dtype=float)
+        
+        # Compute argmin for each window
+        for time_idx in range(windows.sizes['time']):
+            for asset_idx in range(windows.sizes['asset']):
+                window_vals = windows.isel(time=time_idx, asset=asset_idx).values
+                
+                # Check if window has valid data
+                if len(window_vals) == 0 or np.all(np.isnan(window_vals)):
+                    continue  # Leave as NaN
+                
+                # Find argmin (absolute index from start of window)
+                abs_idx = np.nanargmin(window_vals)
+                
+                # Convert to relative index (days ago from end of window)
+                rel_idx = len(window_vals) - 1 - abs_idx
+                
+                result[time_idx, asset_idx] = float(rel_idx)
+        
+        return result
 
