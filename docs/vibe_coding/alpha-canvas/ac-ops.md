@@ -715,21 +715,222 @@ All arithmetic operators **MUST** comply with:
 
 ---
 
-## 8. Summary
+## 8. Time-Series Operators Status
+
+### 8.1. Implemented Operators (15) ✅
+
+**Core Rolling Aggregations (Batch 1)**:
+- `TsMax(child, window)` - Rolling maximum
+- `TsMin(child, window)` - Rolling minimum
+- `TsSum(child, window)` - Rolling sum
+- `TsStdDev(child, window)` - Rolling standard deviation (ddof=0)
+- `TsProduct(child, window)` - Rolling product
+- `TsMean(child, window)` - Rolling mean (pre-existing)
+
+**Shift Operations (Batch 2)**:
+- `TsDelay(child, window)` - Return value from d days ago
+- `TsDelta(child, window)` - Difference: x - delay(x, d)
+
+**Index Operations (Batch 3)**:
+- `TsArgMax(child, window)` - Days ago when maximum occurred (0=today)
+- `TsArgMin(child, window)` - Days ago when minimum occurred (0=today)
+
+**Two-Input Statistics (Batch 4)**:
+- `TsCorr(left, right, window)` - Rolling Pearson correlation
+- `TsCovariance(left, right, window)` - Rolling covariance
+
+**Special Statistics (Batch 5)**:
+- `TsCountNans(child, window)` - Count NaN values in rolling window
+- `TsRank(child, window)` - Normalized rank of current value [0,1]
+
+**Boolean Operators**:
+- `TsAny(child, window)` - Rolling boolean aggregation (pre-existing)
+
+**Status**: All core operators validated with experiments, tests, and showcases.
+
+---
+
+### 8.2. Not Implemented (14 from WQ BRAIN)
+
+These operators from WorldQuant BRAIN are **not yet implemented**. They are categorized by priority and implementation complexity.
+
+#### Priority 1: High Value (Research-Critical)
+
+**`ts_zscore(x, d)`** 📋 **PLANNED**
+- **Description**: Z-score normalization (x - mean) / std
+- **Use Case**: Mean-reversion signals, outlier detection
+- **Complexity**: LOW (simple composition)
+- **Implementation**: `(x - ts_mean(x, d)) / ts_std_dev(x, d)`
+- **Why Important**: Core technical indicator for mean-reversion strategies
+
+**`ts_av_diff(x, d)`** 📋 **PLANNED**
+- **Description**: Deviation from moving average: x - ts_mean(x, d)
+- **Use Case**: Mean-reversion, breakout detection
+- **Complexity**: LOW (simple composition)
+- **Implementation**: `x - ts_mean(x, d)` (but NaN-aware)
+- **Why Important**: Fundamental for momentum/mean-reversion strategies
+
+**`ts_decay_linear(x, d, dense=false)`** 📋 **PLANNED**
+- **Description**: Linearly weighted moving average (more weight to recent)
+- **Use Case**: Smoothing with recency bias
+- **Complexity**: MEDIUM (custom weights)
+- **Why Important**: Better smoothing than simple moving average
+
+**`ts_scale(x, d, constant=0)`** 📋 **PLANNED**
+- **Description**: Min-max normalization to [0,1] over rolling window
+- **Use Case**: Creating oscillator-like indicators
+- **Complexity**: LOW (composition of ts_min/ts_max)
+- **Implementation**: `(x - ts_min(x, d)) / (ts_max(x, d) - ts_min(x, d)) + constant`
+- **Why Important**: Common pattern in technical analysis
+
+#### Priority 2: Medium Value (Specialized)
+
+**`ts_quantile(x, d, driver="gaussian")`** 📋 **PLANNED**
+- **Description**: Transform via inverse CDF (gaussian/uniform/cauchy)
+- **Use Case**: Distribution transformation, normalization
+- **Complexity**: MEDIUM (requires scipy.stats)
+- **Why Important**: Statistical normalization for cross-asset comparisons
+
+**`ts_regression(y, x, d, lag=0, rettype=0)`** 📋 **PLANNED**
+- **Description**: Rolling OLS regression with multiple outputs (α, β, R², residuals, etc.)
+- **Use Case**: Beta calculation, factor models, error terms
+- **Complexity**: HIGH (10 different return types)
+- **Why Important**: Core for factor analysis and beta hedging
+
+**`ts_backfill(x, lookback=d, k=1, ignore="NAN")`** 📋 **PLANNED**
+- **Description**: Fill NaN with k-th most recent non-NaN value
+- **Use Case**: Handling sparse fundamental data
+- **Complexity**: MEDIUM (requires state tracking)
+- **Why Important**: Essential for fundamental factor research
+
+**`kth_element(x, d, k, ignore="NAN")`** 📋 **PLANNED**
+- **Description**: Return k-th element from past d days, ignoring specified values
+- **Use Case**: Backfill operator, data imputation
+- **Complexity**: MEDIUM (window indexing)
+- **Why Important**: Fundamental data handling
+
+#### Priority 3: Low Value (Niche/Complex)
+
+**`hump(x, hump=0.01)`** 📋 **FUTURE**
+- **Description**: Limits magnitude/frequency of changes (turnover reduction)
+- **Use Case**: Turnover control, transaction cost reduction
+- **Complexity**: MEDIUM (requires state)
+- **Rationale**: Niche use case, can be implemented externally
+
+**`jump_decay(x, d, sensitivity=0.5, force=0.1)`** 📋 **FUTURE**
+- **Description**: Detect and reduce impact of large jumps
+- **Use Case**: Outlier smoothing for fundamental data
+- **Complexity**: HIGH (complex conditional logic)
+- **Rationale**: Very specialized, limited applicability
+
+**`days_from_last_change(x)`** 📋 **FUTURE**
+- **Description**: Count days since value last changed
+- **Use Case**: Stale data detection
+- **Complexity**: MEDIUM (requires state)
+- **Rationale**: Niche diagnostic tool
+
+**`last_diff_value(x, d)`** 📋 **FUTURE**
+- **Description**: Last value different from current within window
+- **Use Case**: Pattern recognition
+- **Complexity**: MEDIUM (window search)
+- **Rationale**: Niche pattern detection
+
+**`ts_target_tvr_decay(x, lambda_min=0, lambda_max=1, target_tvr=0.1)`** 📋 **FUTURE**
+- **Description**: Optimize decay parameter for target turnover
+- **Use Case**: Turnover optimization
+- **Complexity**: VERY HIGH (optimization loop)
+- **Rationale**: Research-stage feature, not production-ready
+
+**`ts_target_tvr_delta_limit(x, y, lambda_min=0, lambda_max=1, target_tvr=0.1)`** 📋 **FUTURE**
+- **Description**: Optimize delta limit for target turnover
+- **Use Case**: Turnover optimization with scaling
+- **Complexity**: VERY HIGH (optimization loop)
+- **Rationale**: Research-stage feature, not production-ready
+
+#### Explicitly Skipped
+
+**`ts_step(x)`** ❌ **NOT IMPLEMENTING**
+- **Description**: Creates counter (1, 2, 3, ...) per row
+- **Rationale**: Doesn't use input data, trivial to implement externally
+- **Alternative**: `xr.DataArray(np.arange(1, T+1), dims=['time'])`
+
+---
+
+### 8.3. Implementation Roadmap
+
+**Phase 6: High-Value Compositions (Easy Wins)** 📋 **NEXT**
+- `TsZscore(x, d)` - Z-score normalization
+- `TsAvDiff(x, d)` - Deviation from mean
+- `TsScale(x, d, constant)` - Min-max normalization
+- **Effort**: 1-2 days
+- **Value**: High (common patterns)
+
+**Phase 7: Weighted & Advanced Stats** 📋 **FUTURE**
+- `TsDecayLinear(x, d, dense)` - Linearly weighted MA
+- `TsQuantile(x, d, driver)` - Distribution transformation
+- **Effort**: 3-5 days
+- **Value**: Medium (specialized use cases)
+
+**Phase 8: Regression & Backfill** 📋 **FUTURE**
+- `TsRegression(y, x, d, lag, rettype)` - OLS regression
+- `TsBackfill(x, lookback, k, ignore)` - Data imputation
+- `KthElement(x, d, k, ignore)` - Element selection
+- **Effort**: 5-7 days
+- **Value**: High for fundamental research
+
+**Phase 9: Turnover Control (Low Priority)** 📋 **MAYBE**
+- `Hump(x, hump)` - Change limiting
+- `JumpDecay(x, d, sensitivity, force)` - Jump smoothing
+- `TsTargetTvrDecay/DeltaLimit` - Turnover optimization
+- **Effort**: 10+ days
+- **Value**: Niche
+
+---
+
+### 8.4. Design Patterns for Future Operators
+
+**Composition over Implementation**:
+- `TsZscore` = `(x - TsMean(x, d)) / TsStdDev(x, d)`
+- `TsAvDiff` = `x - TsMean(x, d)`
+- `TsScale` = `(x - TsMin(x, d)) / (TsMax(x, d) - TsMin(x, d))`
+
+**When to Implement vs Compose**:
+- ✅ **Implement**: Core primitive that can't be composed (e.g., `TsMean`, `TsCorr`)
+- ✅ **Implement**: Performance-critical (composition too slow)
+- ❌ **Compose**: Simple algebraic combinations (e.g., `TsZscore`)
+- ❌ **Compose**: One-off use cases (implement externally)
+
+**NaN Handling Philosophy**:
+- Rolling aggregations: Preserve NaN at beginning (min_periods=window)
+- Statistical operators: NaN propagation (any NaN → result NaN)
+- Data quality: Operators like `TsCountNans` that **analyze** NaN (don't propagate)
+
+---
+
+## 9. Summary
 
 ### What This Document Covers
 
-This document defines **Arithmetic Operators** only:
+**Arithmetic Operators** (Complete):
 - ✅ Binary operators (Add, Sub, Mul, Div, Pow)
-- 🔨 Unary operators (Abs, Log, Sign, Inverse)
-- 🔨 Special operators (SignedPower)
-- 🔨 Variadic operators (Max, Min)
-- 📋 Utility operators (ToNan)
+- ✅ Unary operators (Abs, Log, Sign, Inverse)
+- ✅ Special operators (SignedPower)
+- ✅ Variadic operators (Max, Min)
+- ✅ Utility operators (ToNan)
+
+**Time-Series Operators** (Core Complete):
+- ✅ **15 operators implemented** across 5 batches
+- ✅ Rolling aggregations (max, min, sum, std, product, mean)
+- ✅ Shift operations (delay, delta)
+- ✅ Index operations (argmax, argmin)
+- ✅ Two-input statistics (correlation, covariance)
+- ✅ Special statistics (count_nans, rank)
+- 📋 **14 advanced operators planned** (zscore, regression, backfill, etc.)
 
 ### What Other Documents Cover
 
 - **Logical Operators** (`ops/logical.py`) - ✅ Complete: All comparisons (==, !=, >, <, >=, <=), logical (And, Or, Not), and IsNan
-- **Time Series Operators** (`ops/timeseries.py`) - ts_mean, rolling windows, lags
+- **Time Series Operators** (`ops/timeseries.py`) - ✅ Core operators complete (15 implemented), advanced operators planned
 - **Cross-Sectional Operators** (`ops/crosssection.py`) - rank, scale, normalize
 - **Classification Operators** (`ops/classification.py`) - CsQuantile (bucketing/labeling)
 - **Transformational Operators** - Group neutralization (planned)
@@ -746,7 +947,7 @@ This document defines **Arithmetic Operators** only:
 
 **Future Work:**
 - Group operators (group_max, group_min, group_mean) - visitor refactoring complete, ready for implementation
-- Time-series operators expansion
+- Time-series operators expansion (see detailed list below)
 - Cross-sectional operators expansion
 - Transformational operators (neutralization, etc.)
 

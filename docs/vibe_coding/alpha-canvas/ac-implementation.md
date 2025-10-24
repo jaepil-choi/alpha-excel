@@ -4,7 +4,7 @@
 
 ## 3.0. 구현 현황 요약 (Implementation Status Summary)
 
-**마지막 업데이트**: 2025-01-23
+**마지막 업데이트**: 2025-10-24
 
 ### ✅ **완료된 핵심 기능**
 
@@ -19,14 +19,18 @@
 | **Universe Masking** | ✅ DONE | `core/facade.py`, `core/visitor.py` | Double masking strategy |
 | **Boolean Expressions** | ✅ DONE | `core/expression.py`, `ops/logical.py` | Comparison + logical operators |
 | **DataAccessor** | ✅ DONE | `utils/accessor.py` | `rc.data['field']` interface |
+| **Arithmetic Operators** | ✅ DONE | `ops/arithmetic.py` | Binary, unary, variadic, special (13 ops) |
+| **Logical Operators** | ✅ DONE | `ops/logical.py` | Comparisons, logical, IsNan (10 ops) |
+| **Time-Series Operators** | ✅ CORE DONE | `ops/timeseries.py` | Rolling, shift, stats (15 ops implemented) |
 
 ### 📊 **테스트 및 검증 현황**
 
-- ✅ **176개** 단위/통합 테스트 (`tests/`)
-- ✅ **18개** 실험 스크립트 (`experiments/`)
-- ✅ **16개** showcase 예제 (`showcase/`)
+- ✅ **200+개** 단위/통합 테스트 (`tests/`)
+- ✅ **28개** 실험 스크립트 (`experiments/exp_01` - `exp_28`)
+- ✅ **25개** showcase 예제 (`showcase/01` - `showcase/25`)
 - ✅ Fama-French 2×3 factor 재현 검증
 - ✅ 성능 벤치마크 (vectorized operations)
+- ✅ **38 operators implemented** (arithmetic, logical, time-series)
 
 ### 📋 **alpha-lab으로 이관 예정**
 
@@ -2289,20 +2293,40 @@ rc.add_axis('filtered', cs_quantile(rc.data.returns, bins=5, labels=[...],
 
 ---
 
+### 📋 **연산자 구현 현황**
+
+**✅ 완료 (38 operators)**:
+- Arithmetic (13): Add, Sub, Mul, Div, Pow, Abs, Log, Sign, Inverse, SignedPower, Max, Min, ToNan
+- Logical (10): Equals, NotEquals, GreaterThan, LessThan, GreaterOrEqual, LessOrEqual, And, Or, Not, IsNan
+- Time-Series Core (15): TsMean, TsAny, TsMax, TsMin, TsSum, TsStdDev, TsProduct, TsDelay, TsDelta, TsArgMax, TsArgMin, TsCorr, TsCovariance, TsCountNans, TsRank
+
+**📋 계획 (Time-Series Advanced - 14 operators)**:
+- **Priority 1 (4 ops)**: TsZscore, TsAvDiff, TsDecayLinear, TsScale
+- **Priority 2 (4 ops)**: TsQuantile, TsRegression, TsBackfill, KthElement
+- **Priority 3 (6 ops)**: Hump, JumpDecay, DaysFromLastChange, LastDiffValue, TsTargetTvrDecay, TsTargetTvrDeltaLimit
+
+**🎯 다음 단계**:
+1. **Phase 6**: High-value compositions (TsZscore, TsAvDiff, TsScale) - 1-2 days
+2. **Cross-Sectional Operators**: Scale, ScaleDown, Normalize, ZScore
+3. **Group Operators**: GroupMean, GroupMax, GroupMin, GroupNeutralize
+
+---
+
 ### 📋 **미구현 기능** (alpha-lab으로 이관 예정)
 
 - [ ] `PnLTracer` 컴포넌트 → **alpha-lab**으로 이관
 - [ ] 성과 지표 계산 (Sharpe, drawdown, etc.) → **alpha-lab**로 이관
 - [ ] PnL 시각화 (curves, heatmaps) → **alpha-lab**로 이관
 - [ ] Step 비교 및 분석 → **alpha-lab**로 이관
+- [ ] Factor exposure 및 IC 분석 → **alpha-lab**로 이관
 
 **근거**: alpha-canvas는 **compute engine** (signal 생성, weight 계산, portfolio return 계산)에 집중하며, 분석 및 시각화는 **alpha-lab**에서 제공합니다. 이는 PRD Section 1.9 및 2.1에 명시된 아키텍처 분리 원칙을 따릅니다.
 
 ---
 
-### 📦 **다음 주요 작업: Monorepo 리팩토링 및 alpha-database 마이그레이션**
+### 📦 **장기 작업: Monorepo 리팩토링 및 alpha-database 마이그레이션**
 
-**목표**: 데이터 로딩 책임을 alpha-database 패키지로 분리
+**목표**: 데이터 로딩 책임을 alpha-database 패키지로 분리 (우선순위: 낮음)
 
 #### 마이그레이션 계획:
 
