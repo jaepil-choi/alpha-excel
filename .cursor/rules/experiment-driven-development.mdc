@@ -147,12 +147,21 @@ Before merging any code, verify:
    - **CRITICAL**: Include extensive terminal output using `print()` statements
    - Output should be detailed enough for an LLM to understand what's happening
    - Include timing measurements, counts, sample data, and validation checks
+   - **Fake data allowed**: You can create fake/mock data inline for testing
+   - **Always print fake data**: Show the generated data and its progression so reviewers can verify correctness
 
 2. **Make Experiments Observable**
    ```python
-   # GOOD: Verbose, LLM-readable output
+   # GOOD: Verbose, LLM-readable output with fake data
    print("="*60)
-   print(f"Testing hypothesis: {hypothesis}")
+   print("Creating fake test data...")
+   fake_data = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
+   print(f"  Shape: {fake_data.shape}")
+   print(f"  Data:\n{fake_data}")
+   
+   print(f"\nTesting hypothesis: {hypothesis}")
+   result = some_function(fake_data)
+   print(f"  Result:\n{result}")
    print(f"Expected: {expected}")
    print(f"Actual: {actual}")
    if actual == expected:
@@ -163,8 +172,9 @@ Before merging any code, verify:
    ```
 
    ```python
-   # BAD: Silent execution
-   result = some_function()  # No output, LLM can't see what happened
+   # BAD: Silent execution without showing data
+   fake_data = np.array([[1.0, 2.0, 3.0]])  # Not printed!
+   result = some_function(fake_data)  # No output, LLM can't see what happened
    ```
 
 3. **Document Findings**
@@ -272,6 +282,9 @@ Before merging any code, verify:
    - Demonstrate the **public API** that users will actually use
    - Show **complete workflows** from start to finish
    - Focus on **usability** and **real-world scenarios**
+   - **No inline fake data**: Always load data from files (even if the files contain fake data)
+   - **Load actual configs**: Use real config files, data loaders, and other production components
+   - **Demonstrate real usage**: Show users how they would actually use the system in practice
 
 2. **Showcase Structure**
    - Import from the main package (not internal modules)
@@ -289,23 +302,41 @@ Before merging any code, verify:
 
 4. **Make Showcases Observable**
    ```python
-   # GOOD: User-focused demonstration
+   # GOOD: User-focused demonstration with real data loading
    print("\n" + "="*60)
    print("SHOWCASE: Time-Series Rolling Mean")
    print("="*60)
    
    # Show typical user workflow
-   print("\n[1] Load data and create expression")
+   print("\n[1] Load configuration and data")
+   from alpha_canvas import AlphaCanvas
+   from alpha_database import DataSource
+   
+   data_source = DataSource()
+   rc = AlphaCanvas(
+       start_date="2020-01-01",
+       end_date="2020-12-31",
+       data_source=data_source
+   )
+   
+   print("\n[2] Create expression using loaded data")
    expr = rc.ts_mean(rc.data['close'], window=20)
    
-   print("\n[2] Evaluate expression")
+   print("\n[3] Evaluate expression")
    result = rc.evaluate(expr)
    
-   print("\n[3] Inspect results")
+   print("\n[4] Inspect results")
    print(f"  Shape: {result.shape}")
    print(f"  First 5 values: {result.values[0, :5]}")
    
    print("\n[SUCCESS] Complete workflow demonstrated")
+   ```
+
+   ```python
+   # BAD: Inline fake data in showcase
+   print("\n[1] Create fake data")
+   fake_data = np.array([[1.0, 2.0, 3.0]])  # Don't do this in showcases!
+   expr = rc.ts_mean(fake_data, window=20)  # Users won't use data this way
    ```
 
 5. **Documentation Integration**
@@ -526,23 +557,38 @@ def main():
     print("SHOWCASE: [Name]")
     print("="*60)
     
-    # Section 1: Basic Usage
-    print("\n[1] Basic Usage - [Description]")
-    # ... user-focused code ...
+    # Section 1: Setup - Load real data/config
+    print("\n[1] Setup - Loading data and configuration")
+    # Import production components
+    from alpha_canvas import AlphaCanvas
+    from alpha_database import DataSource
+    
+    # Load data (even if it's fake data, load it from files)
+    data_source = DataSource()
+    rc = AlphaCanvas(
+        start_date="2020-01-01",
+        end_date="2020-12-31",
+        data_source=data_source
+    )
+    print("  ✓ Data loaded successfully")
+    
+    # Section 2: Basic Usage
+    print("\n[2] Basic Usage - [Description]")
+    # ... user-focused code using loaded data ...
     print("  ✓ Basic workflow complete")
     
-    # Section 2: Advanced Features
-    print("\n[2] Advanced Features - [Description]")
+    # Section 3: Advanced Features
+    print("\n[3] Advanced Features - [Description]")
     # ... demonstrate more complex usage ...
     print("  ✓ Advanced features demonstrated")
     
-    # Section 3: Integration
-    print("\n[3] Integration - [Description]")
+    # Section 4: Integration
+    print("\n[4] Integration - [Description]")
     # ... show how it works with other components ...
     print("  ✓ Integration validated")
     
-    # Section 4: Edge Cases
-    print("\n[4] Edge Cases - [Description]")
+    # Section 5: Edge Cases
+    print("\n[5] Edge Cases - [Description]")
     # ... demonstrate handling of edge cases ...
     print("  ✓ Edge cases handled correctly")
     
@@ -582,6 +628,12 @@ if __name__ == '__main__':
 - Implementing features without demonstrating integrated workflows
 - Creating showcases that only test internal APIs instead of public APIs
 
+### ❌ Incorrect Data Handling
+- **In Experiments**: Creating fake data but not printing it out for verification
+- **In Showcases**: Creating inline fake data instead of loading from files
+- **In Showcases**: Hardcoding data instead of using production data loaders
+- **In Showcases**: Skipping config loading to "simplify" the example
+
 ## When to Experiment
 
 **Always experiment when:**
@@ -602,11 +654,12 @@ if __name__ == '__main__':
 ### An Experiment is Successful When:
 1. ✅ Hypothesis is validated (or disproven with clear explanation)
 2. ✅ Terminal output clearly shows what happened
-3. ✅ Findings are documented with code examples
-4. ✅ Performance metrics are recorded
-5. ✅ Edge cases are identified
-6. ✅ Tests can be written based on experiment results
-7. ✅ **Documents are updated to reflect discoveries**
+3. ✅ **Fake data (if used) is printed and observable**
+4. ✅ Findings are documented with code examples
+5. ✅ Performance metrics are recorded
+6. ✅ Edge cases are identified
+7. ✅ Tests can be written based on experiment results
+8. ✅ **Documents are updated to reflect discoveries**
 
 ### An Implementation is Successful When:
 1. ✅ All tests pass (green)
@@ -620,12 +673,14 @@ if __name__ == '__main__':
 ### A Showcase is Successful When:
 1. ✅ Demonstrates the public API (not internal implementation)
 2. ✅ Shows complete, realistic workflows from start to finish
-3. ✅ Runs without errors and produces expected output
-4. ✅ Terminal output is clear and user-friendly
-5. ✅ Demonstrates integration with other components
-6. ✅ Includes both basic and advanced usage patterns
-7. ✅ Serves as living documentation that users can reference
-8. ✅ Listed and documented in `showcase/README.md`
+3. ✅ **Loads data from files (no inline fake data creation)**
+4. ✅ **Uses real config files and production components**
+5. ✅ Runs without errors and produces expected output
+6. ✅ Terminal output is clear and user-friendly
+7. ✅ Demonstrates integration with other components
+8. ✅ Includes both basic and advanced usage patterns
+9. ✅ Serves as living documentation that users can reference
+10. ✅ Listed and documented in `showcase/README.md`
 
 Remember: **Failed experiments that teach us something are successful experiments.**
 Remember: **Code that doesn't match documents means either the code or the docs need updating.**
