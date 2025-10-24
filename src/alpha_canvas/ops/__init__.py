@@ -10,7 +10,7 @@ This module contains all operator implementations organized by category:
 - transform: Transformation operators (group_neutralize, etc.)
 """
 
-from .timeseries import TsMean, TsAny
+from .timeseries import TsMean, TsAny, TsMax, TsMin, TsSum, TsStdDev, TsProduct
 from .crosssection import Rank
 from .logical import Equals, NotEquals, GreaterThan, LessThan, GreaterOrEqual, LessOrEqual, And, Or, Not, IsNan
 from .arithmetic import Add, Sub, Mul, Div, Pow, Abs, Log, Sign, Inverse, SignedPower, Max, Min, ToNan
@@ -18,7 +18,8 @@ from .classification import CsQuantile
 from .constants import Constant
 
 __all__ = [
-    'TsMean', 'TsAny', 'Rank',
+    'TsMean', 'TsAny', 'TsMax', 'TsMin', 'TsSum', 'TsStdDev', 'TsProduct',
+    'Rank',
     'Equals', 'NotEquals', 'GreaterThan', 'LessThan', 'GreaterOrEqual', 'LessOrEqual',
     'And', 'Or', 'Not', 'IsNan',
     'Add', 'Sub', 'Mul', 'Div', 'Pow',

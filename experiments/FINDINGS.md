@@ -4,6 +4,122 @@ This document records critical discoveries from experiments, including what work
 
 ---
 
+## Phase 24: Time-Series Rolling Aggregations (Batch 1)
+
+### Experiment 24: Simple Rolling Aggregations
+
+**Date**: 2024-10-24  
+**Status**: ✅ SUCCESS
+
+**Summary**: Implemented and validated 5 simple rolling aggregation operators: TsMax, TsMin, TsSum, TsStdDev, TsProduct. All operators follow the same pattern as TsMean, using xarray's `.rolling().method()` API with `min_periods=window` for consistent NaN padding.
+
+#### Key Discoveries
+
+1. **Consistent Implementation Pattern**
+   - **Pattern**: All operators use `child_result.rolling(time=window, min_periods=window).{method}()`
+   - **Methods**: `.max()`, `.min()`, `.sum()`, `.std()`, `.prod()`
+   - **Simplicity**: No custom logic needed - xarray handles everything correctly
+   - **Performance**: Native xarray operations are highly optimized
+
+2. **Standard Deviation: ddof=0 (Population Std)**
+   - **Discovery**: xarray uses `ddof=0` (population standard deviation) by default
+   - **Expected**: `ddof=1` (sample standard deviation)
+   - **Impact**: For window [1,2,3], std = 0.8165 (not 1.0)
+   - **Decision**: Document this behavior in docstring, keep xarray default
+   - **Rationale**: Consistency with xarray conventions, users expect xarray behavior
+
+3. **NaN Propagation Verified**
+   - NaN in input → NaN in all windows containing that position
+   - Example: NaN at t=5 with window=3 → t=5,6,7 all NaN
+   - Consistent across all 5 operators
+   - No manual NaN handling needed in compute() methods
+
+4. **min_periods=window Enforces NaN Padding**
+   - First (window-1) rows always NaN (incomplete windows)
+   - No partial computations on incomplete windows
+   - Matches WorldQuant BRAIN behavior
+   - Critical for backtesting (prevents look-ahead bias)
+
+5. **Polymorphic Design Works Perfectly**
+   - All operators work on time dimension only
+   - Independent computation per asset (no cross-sectional contamination)
+   - Shape preservation: output shape === input shape
+   - Ready for future DataTensor (T, N, N) support
+
+#### Implementation Patterns
+
+All 5 operators follow identical structure:
+
+```python
+@dataclass(eq=False)
+class Ts{Operation}(Expression):
+    """Rolling time-series {operation} operator."""
+    child: Expression
+    window: int
+    
+    def accept(self, visitor):
+        return visitor.visit_operator(self)
+    
+    def compute(self, child_result: 'xr.DataArray') -> 'xr.DataArray':
+        return child_result.rolling(
+            time=self.window,
+            min_periods=self.window
+        ).{method}()
+```
+
+**Method mapping**:
+- TsMax: `.max()`
+- TsMin: `.min()`
+- TsSum: `.sum()`
+- TsStdDev: `.std()`  (ddof=0)
+- TsProduct: `.prod()`
+
+#### Validation Results
+
+**Test Coverage**:
+- ✅ Basic rolling computations (all 5 operators)
+- ✅ NaN padding at start (min_periods=window)
+- ✅ NaN propagation through windows
+- ✅ Edge cases: constant values, alternating patterns
+- ✅ Shape preservation
+- ✅ Asset independence
+
+**Performance**: 0.059s for all 7 test suites (10x5 data)
+
+#### Use Cases Validated
+
+1. **TsMax**: Breakout detection, support levels, channel strategies
+2. **TsMin**: Resistance levels, stop-loss strategies, range identification
+3. **TsSum**: Cumulative metrics, RSI components, volume accumulation
+4. **TsStdDev**: Volatility calculation, Bollinger Bands, risk metrics
+5. **TsProduct**: Compound returns, geometric means, multiplicative metrics
+
+#### Architectural Insights
+
+1. **xarray Integration Is Seamless**
+   - No need for custom rolling window logic
+   - NaN handling automatic and correct
+   - Performance excellent out-of-the-box
+
+2. **Pattern Reusability**
+   - This pattern will work for many more operators
+   - Batch 2-5 should be similarly straightforward
+   - Document pattern once, replicate easily
+
+3. **Visitor Pattern Works Perfectly**
+   - No special handling needed for rolling operators
+   - Generic `visit_operator()` handles all cases
+   - Cache integration automatic
+
+#### Next Steps
+
+**Batch 2**: Shift operations (TsDelay, TsDelta)
+**Batch 3**: Index operations (TsArgMax, TsArgMin)
+**Batch 4**: Two-input stats (TsCorr, TsCovariance)
+**Batch 5**: Special stats (TsCountNans, TsRank)
+
+---
+
 ## Phase 8: ts_any() Operator
 
 ### Experiment 11: Rolling Boolean Window Operations

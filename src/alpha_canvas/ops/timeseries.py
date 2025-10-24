@@ -7,6 +7,18 @@ All time-series operators:
 - Preserve input shape
 - Operate independently on each asset/pair
 - Use rolling window mechanics where applicable
+
+Available Operators:
+    Simple Rolling Aggregations (Batch 1):
+    - TsMean: Rolling mean
+    - TsMax: Rolling maximum
+    - TsMin: Rolling minimum
+    - TsSum: Rolling sum
+    - TsStdDev: Rolling standard deviation
+    - TsProduct: Rolling product
+    
+    Boolean Operators:
+    - TsAny: Rolling any (boolean aggregation)
 """
 
 from dataclasses import dataclass
@@ -158,4 +170,282 @@ class TsAny(Expression):
         result = result.where(~np.isnan(count_true), np.nan)
         
         return result
+
+
+@dataclass(eq=False)
+class TsMax(Expression):
+    """Rolling time-series maximum operator.
+    
+    Computes the rolling maximum over a specified time window.
+    This is a polymorphic operator that works on the time dimension only,
+    making it compatible with both DataPanel (T, N) and future DataTensor (T, N, N).
+    
+    Args:
+        child: Expression to compute rolling maximum over
+        window: Rolling window size (number of time periods)
+    
+    Returns:
+        DataArray with same shape as input.
+        First (window-1) rows are NaN due to incomplete windows.
+        
+    Example:
+        >>> # 5-day high
+        >>> expr = TsMax(child=Field('close'), window=5)
+        >>> rc.add_data('high_5d', expr)
+        
+        >>> # Identify breakouts
+        >>> breakout = Field('close') > TsMax(Field('close'), 20)
+        >>> rc.add_data('breakout_signal', breakout)
+    
+    Notes:
+        - Uses min_periods=window to enforce NaN padding at start
+        - Each asset computed independently (no cross-sectional contamination)
+        - Output shape matches input shape exactly
+        - Useful for support/resistance levels and breakout detection
+        - NaN in window → NaN result (propagates NaN)
+    """
+    child: Expression
+    window: int
+    
+    def accept(self, visitor):
+        """Accept a visitor for the Visitor pattern."""
+        return visitor.visit_operator(self)
+    
+    def compute(self, child_result: 'xr.DataArray') -> 'xr.DataArray':
+        """Core computation logic for rolling maximum.
+        
+        Args:
+            child_result: Input DataArray from child expression evaluation
+        
+        Returns:
+            DataArray with rolling maximum applied along time dimension
+        """
+        return child_result.rolling(
+            time=self.window,
+            min_periods=self.window
+        ).max()
+
+
+@dataclass(eq=False)
+class TsMin(Expression):
+    """Rolling time-series minimum operator.
+    
+    Computes the rolling minimum over a specified time window.
+    This is a polymorphic operator that works on the time dimension only,
+    making it compatible with both DataPanel (T, N) and future DataTensor (T, N, N).
+    
+    Args:
+        child: Expression to compute rolling minimum over
+        window: Rolling window size (number of time periods)
+    
+    Returns:
+        DataArray with same shape as input.
+        First (window-1) rows are NaN due to incomplete windows.
+        
+    Example:
+        >>> # 5-day low
+        >>> expr = TsMin(child=Field('close'), window=5)
+        >>> rc.add_data('low_5d', expr)
+        
+        >>> # Calculate trading range
+        >>> range_5d = TsMax(Field('close'), 5) - TsMin(Field('close'), 5)
+        >>> rc.add_data('range', range_5d)
+    
+    Notes:
+        - Uses min_periods=window to enforce NaN padding at start
+        - Each asset computed independently (no cross-sectional contamination)
+        - Output shape matches input shape exactly
+        - Useful for support/resistance levels and channel strategies
+        - NaN in window → NaN result (propagates NaN)
+    """
+    child: Expression
+    window: int
+    
+    def accept(self, visitor):
+        """Accept a visitor for the Visitor pattern."""
+        return visitor.visit_operator(self)
+    
+    def compute(self, child_result: 'xr.DataArray') -> 'xr.DataArray':
+        """Core computation logic for rolling minimum.
+        
+        Args:
+            child_result: Input DataArray from child expression evaluation
+        
+        Returns:
+            DataArray with rolling minimum applied along time dimension
+        """
+        return child_result.rolling(
+            time=self.window,
+            min_periods=self.window
+        ).min()
+
+
+@dataclass(eq=False)
+class TsSum(Expression):
+    """Rolling time-series sum operator.
+    
+    Computes the rolling sum over a specified time window.
+    This is a polymorphic operator that works on the time dimension only,
+    making it compatible with both DataPanel (T, N) and future DataTensor (T, N, N).
+    
+    Args:
+        child: Expression to compute rolling sum over
+        window: Rolling window size (number of time periods)
+    
+    Returns:
+        DataArray with same shape as input.
+        First (window-1) rows are NaN due to incomplete windows.
+        
+    Example:
+        >>> # 10-day cumulative volume
+        >>> expr = TsSum(child=Field('volume'), window=10)
+        >>> rc.add_data('cum_volume_10d', expr)
+        
+        >>> # RSI-style up moves sum
+        >>> up_moves = (Field('close') - Field('open')).clip(min=0)
+        >>> expr = TsSum(child=up_moves, window=14)
+        >>> rc.add_data('up_sum_14d', expr)
+    
+    Notes:
+        - Uses min_periods=window to enforce NaN padding at start
+        - Each asset computed independently (no cross-sectional contamination)
+        - Output shape matches input shape exactly
+        - Core component of indicators like RSI, Accumulation/Distribution
+        - NaN in window → NaN result (propagates NaN)
+    """
+    child: Expression
+    window: int
+    
+    def accept(self, visitor):
+        """Accept a visitor for the Visitor pattern."""
+        return visitor.visit_operator(self)
+    
+    def compute(self, child_result: 'xr.DataArray') -> 'xr.DataArray':
+        """Core computation logic for rolling sum.
+        
+        Args:
+            child_result: Input DataArray from child expression evaluation
+        
+        Returns:
+            DataArray with rolling sum applied along time dimension
+        """
+        return child_result.rolling(
+            time=self.window,
+            min_periods=self.window
+        ).sum()
+
+
+@dataclass(eq=False)
+class TsStdDev(Expression):
+    """Rolling time-series standard deviation operator.
+    
+    Computes the rolling standard deviation over a specified time window.
+    This is a polymorphic operator that works on the time dimension only,
+    making it compatible with both DataPanel (T, N) and future DataTensor (T, N, N).
+    
+    Args:
+        child: Expression to compute rolling standard deviation over
+        window: Rolling window size (number of time periods)
+    
+    Returns:
+        DataArray with same shape as input.
+        First (window-1) rows are NaN due to incomplete windows.
+        
+    Example:
+        >>> # 20-day volatility
+        >>> returns = Field('close') / Field('close').shift(time=1) - 1
+        >>> expr = TsStdDev(child=returns, window=20)
+        >>> rc.add_data('volatility_20d', expr)
+        
+        >>> # Bollinger Bands
+        >>> ma = TsMean(Field('close'), 20)
+        >>> std = TsStdDev(Field('close'), 20)
+        >>> upper = ma + 2 * std
+        >>> lower = ma - 2 * std
+    
+    Notes:
+        - Uses min_periods=window to enforce NaN padding at start
+        - Each asset computed independently (no cross-sectional contamination)
+        - Output shape matches input shape exactly
+        - Uses population standard deviation (ddof=0) by default in xarray
+        - Key component of volatility-based indicators (Bollinger Bands, ATR)
+        - NaN in window → NaN result (propagates NaN)
+    """
+    child: Expression
+    window: int
+    
+    def accept(self, visitor):
+        """Accept a visitor for the Visitor pattern."""
+        return visitor.visit_operator(self)
+    
+    def compute(self, child_result: 'xr.DataArray') -> 'xr.DataArray':
+        """Core computation logic for rolling standard deviation.
+        
+        Args:
+            child_result: Input DataArray from child expression evaluation
+        
+        Returns:
+            DataArray with rolling std dev applied along time dimension
+        """
+        return child_result.rolling(
+            time=self.window,
+            min_periods=self.window
+        ).std()
+
+
+@dataclass(eq=False)
+class TsProduct(Expression):
+    """Rolling time-series product operator.
+    
+    Computes the rolling product over a specified time window.
+    This is a polymorphic operator that works on the time dimension only,
+    making it compatible with both DataPanel (T, N) and future DataTensor (T, N, N).
+    
+    Args:
+        child: Expression to compute rolling product over
+        window: Rolling window size (number of time periods)
+    
+    Returns:
+        DataArray with same shape as input.
+        First (window-1) rows are NaN due to incomplete windows.
+        
+    Example:
+        >>> # Compound returns over 20 days
+        >>> daily_returns = 1 + Field('returns')
+        >>> expr = TsProduct(child=daily_returns, window=20)
+        >>> rc.add_data('compound_return_20d', expr)
+        
+        >>> # Geometric mean (via product)
+        >>> product = TsProduct(Field('values'), 20)
+        >>> geom_mean = product ** (1/20)
+    
+    Notes:
+        - Uses min_periods=window to enforce NaN padding at start
+        - Each asset computed independently (no cross-sectional contamination)
+        - Output shape matches input shape exactly
+        - Particularly useful for calculating compound returns
+        - More sensitive to extreme values than sum-based operations
+        - NaN in window → NaN result (propagates NaN)
+        - Use with caution: products can grow/shrink exponentially
+    """
+    child: Expression
+    window: int
+    
+    def accept(self, visitor):
+        """Accept a visitor for the Visitor pattern."""
+        return visitor.visit_operator(self)
+    
+    def compute(self, child_result: 'xr.DataArray') -> 'xr.DataArray':
+        """Core computation logic for rolling product.
+        
+        Args:
+            child_result: Input DataArray from child expression evaluation
+        
+        Returns:
+            DataArray with rolling product applied along time dimension
+        """
+        return child_result.rolling(
+            time=self.window,
+            min_periods=self.window
+        ).prod()
 
