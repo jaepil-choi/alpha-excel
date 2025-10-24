@@ -17,6 +17,10 @@ Available Operators:
     - TsStdDev: Rolling standard deviation
     - TsProduct: Rolling product
     
+    Shift Operations (Batch 2):
+    - TsDelay: Return value from d days ago
+    - TsDelta: Difference from d days ago
+    
     Boolean Operators:
     - TsAny: Rolling any (boolean aggregation)
 """
@@ -448,4 +452,128 @@ class TsProduct(Expression):
             time=self.window,
             min_periods=self.window
         ).prod()
+
+
+@dataclass(eq=False)
+class TsDelay(Expression):
+    """Time-series delay operator.
+    
+    Returns the value from `window` days ago (shifts data forward in time).
+    This is a fundamental building block for many time-series operations.
+    
+    Args:
+        child: Expression to delay
+        window: Number of days to look back (shift amount)
+    
+    Returns:
+        DataArray with same shape as input.
+        First `window` rows are NaN (no data to shift from).
+        
+    Example:
+        >>> # Get yesterday's close price
+        >>> expr = TsDelay(child=Field('close'), window=1)
+        >>> rc.add_data('prev_close', expr)
+        
+        >>> # Get price from 5 days ago
+        >>> expr = TsDelay(child=Field('close'), window=5)
+        >>> rc.add_data('close_5d_ago', expr)
+        
+        >>> # Calculate returns manually
+        >>> close = Field('close')
+        >>> prev_close = TsDelay(close, 1)
+        >>> returns = (close / prev_close) - 1
+    
+    Notes:
+        - Uses xarray .shift(time=window) internally
+        - First `window` rows are NaN (forward shift creates NaN at start)
+        - Each asset shifted independently (no cross-sectional contamination)
+        - Output shape matches input shape exactly
+        - Fundamental for calculating differences, returns, momentum
+        - window=0 returns original data (no shift)
+        - window > T returns all NaN (no data to shift from)
+    """
+    child: Expression
+    window: int
+    
+    def accept(self, visitor):
+        """Accept a visitor for the Visitor pattern."""
+        return visitor.visit_operator(self)
+    
+    def compute(self, child_result: 'xr.DataArray') -> 'xr.DataArray':
+        """Core computation logic for time-series delay.
+        
+        Args:
+            child_result: Input DataArray from child expression evaluation
+        
+        Returns:
+            DataArray shifted forward by `window` periods along time dimension
+        
+        Note:
+            - .shift(time=window) shifts data forward (positive = look back)
+            - Creates NaN at start (first `window` positions)
+            - No fill_value parameter needed (NaN is correct)
+        """
+        return child_result.shift(time=self.window)
+
+
+@dataclass(eq=False)
+class TsDelta(Expression):
+    """Time-series delta operator.
+    
+    Calculates the difference between current value and value from `window` days ago.
+    Mathematically: x - ts_delay(x, window)
+    
+    Args:
+        child: Expression to compute delta over
+        window: Number of days to look back for comparison
+    
+    Returns:
+        DataArray with same shape as input.
+        First `window` rows are NaN (no previous data to compare).
+        
+    Example:
+        >>> # Calculate 1-day price change
+        >>> expr = TsDelta(child=Field('close'), window=1)
+        >>> rc.add_data('price_change', expr)
+        
+        >>> # Calculate 5-day momentum
+        >>> expr = TsDelta(child=Field('close'), window=5)
+        >>> rc.add_data('momentum_5d', expr)
+        
+        >>> # Percentage change
+        >>> price = Field('close')
+        >>> delta = TsDelta(price, 1)
+        >>> pct_change = delta / TsDelay(price, 1)
+    
+    Notes:
+        - Equivalent to: x - TsDelay(x, window)
+        - First `window` rows are NaN (incomplete comparison)
+        - Each asset computed independently (no cross-sectional contamination)
+        - Output shape matches input shape exactly
+        - Core component of momentum and mean-reversion strategies
+        - For returns, use: TsDelta(close, 1) / TsDelay(close, 1)
+        - For log returns, use: TsDelta(Log(close), 1)
+    """
+    child: Expression
+    window: int
+    
+    def accept(self, visitor):
+        """Accept a visitor for the Visitor pattern."""
+        return visitor.visit_operator(self)
+    
+    def compute(self, child_result: 'xr.DataArray') -> 'xr.DataArray':
+        """Core computation logic for time-series delta.
+        
+        Args:
+            child_result: Input DataArray from child expression evaluation
+        
+        Returns:
+            DataArray with difference from `window` days ago
+        
+        Note:
+            - Implements: x - x.shift(time=window)
+            - First `window` positions are NaN (no previous data)
+            - More efficient than creating TsDelay explicitly
+        """
+        return child_result - child_result.shift(time=self.window)
 

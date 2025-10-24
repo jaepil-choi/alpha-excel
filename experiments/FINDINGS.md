@@ -4,6 +4,128 @@ This document records critical discoveries from experiments, including what work
 
 ---
 
+## Phase 25: Time-Series Shift Operations (Batch 2)
+
+### Experiment 25: Shift Operations
+
+**Date**: 2024-10-24  
+**Status**: ✅ SUCCESS
+
+**Summary**: Implemented and validated 2 shift operators: TsDelay and TsDelta. Both operators use xarray's `.shift()` method for clean, efficient time-series shifting. These are fundamental building blocks for momentum, returns, and differencing calculations.
+
+#### Key Discoveries
+
+1. **xarray .shift() is Perfect for Time-Series**
+   - **Method**: `child_result.shift(time=window)`
+   - **Behavior**: Positive window shifts forward (looks back in time)
+   - **NaN Handling**: Automatically creates NaN at start (first `window` positions)
+   - **No Edge Cases**: Works correctly for all window values (0, 1, >T)
+
+2. **TsDelta Can Be Inline Computed**
+   - **Pattern**: `x - x.shift(time=window)` in single line
+   - **Efficiency**: No need to create intermediate TsDelay expression
+   - **Relationship**: TsDelta(x, d) ≡ x - TsDelay(x, d) verified mathematically
+
+3. **NaN Padding is Correct for Look-Back**
+   - **Forward shift**: First `window` positions are NaN (no previous data)
+   - **Makes sense**: Can't look back `d` days if fewer than `d` days of history
+   - **Prevents look-ahead**: NaN at start ensures no future data contamination
+
+4. **window=0 Edge Case**
+   - **Behavior**: Returns original data unchanged (no shift)
+   - **Use case**: Useful for dynamic window calculations
+   - **Validation**: Verified identical to input
+
+5. **window > T Edge Case**
+   - **Behavior**: Returns all NaN (no data to shift from)
+   - **Correct**: Can't look back 100 days if only 10 days of data
+   - **No errors**: xarray handles gracefully without exceptions
+
+#### Implementation Patterns
+
+Both operators are extremely simple:
+
+**TsDelay**:
+```python
+@dataclass(eq=False)
+class TsDelay(Expression):
+    child: Expression
+    window: int
+    
+    def compute(self, child_result: xr.DataArray) -> xr.DataArray:
+        return child_result.shift(time=self.window)
+```
+
+**TsDelta**:
+```python
+@dataclass(eq=False)
+class TsDelta(Expression):
+    child: Expression
+    window: int
+    
+    def compute(self, child_result: xr.DataArray) -> xr.DataArray:
+        return child_result - child_result.shift(time=self.window)
+```
+
+**Key insight**: Shift operations are even simpler than rolling aggregations - just one line of xarray code.
+
+#### Validation Results
+
+**Test Coverage**:
+- ✅ Basic shift mechanics (delay=1, delay=3)
+- ✅ NaN padding at start (first `window` values)
+- ✅ Difference calculations (constant, increasing, alternating)
+- ✅ Relationship verification: TsDelta ≡ (x - TsDelay(x))
+- ✅ Edge cases: delay=0, delay>T
+
+**Performance**: 0.025s for all 5 test suites (10x3 data) - even faster than Batch 1
+
+#### Use Cases Validated
+
+1. **TsDelay**: 
+   - Get yesterday's price (window=1)
+   - Get price from N days ago (window=N)
+   - Calculate returns: (close / TsDelay(close, 1)) - 1
+
+2. **TsDelta**:
+   - Price change: TsDelta(close, 1)
+   - Momentum: TsDelta(close, N)
+   - Acceleration: TsDelta(TsDelta(close, 1), 1)
+
+#### Architectural Insights
+
+1. **xarray Shift is Production-Ready**
+   - No custom logic needed
+   - NaN handling automatic and correct
+   - Performance excellent
+   - Works for any window value
+
+2. **Simple is Better**
+   - No rolling window complexity
+   - No min_periods parameter needed
+   - Just shift and optionally subtract
+   - Easy to understand and maintain
+
+3. **Fundamental Building Blocks**
+   - TsDelay is used in returns, momentum, mean-reversion
+   - TsDelta is core of change/difference calculations
+   - Both compose well with other operators
+
+#### Mathematical Relationships
+
+Verified:
+- `TsDelta(x, d) = x - TsDelay(x, d)` ✅
+- `TsDelay(x, 0) = x` ✅
+- `TsDelay(TsDelay(x, a), b) = TsDelay(x, a+b)` (composable)
+
+#### Next Steps
+
+**Batch 3**: Index operations (TsArgMax, TsArgMin) - requires custom rolling logic
+**Batch 4**: Two-input stats (TsCorr, TsCovariance) - binary time-series operators
+**Batch 5**: Special stats (TsCountNans, TsRank) - custom aggregations
+
+---
+
 ## Phase 24: Time-Series Rolling Aggregations (Batch 1)
 
 ### Experiment 24: Simple Rolling Aggregations
