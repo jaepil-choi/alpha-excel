@@ -4,6 +4,167 @@ This document records critical discoveries from experiments, including what work
 
 ---
 
+## Phase 31: FnGuide Data Integration (ETL → alpha-database)
+
+### Experiment 31: FnGuide Data Loading via alpha-database
+
+**Date**: 2025-01-25  
+**Status**: ✅ SUCCESS
+
+**Summary**: Validated complete FnGuide data pipeline from ETL preprocessing through alpha-database loading. Confirmed that hive-partitioned Parquet files load correctly via DuckDB, with proper data types and minimal NaN values. This completes the data integration allowing FnGuide data to be used in alpha-canvas expressions.
+
+#### Key Discoveries
+
+1. **Hive Partitioning Works Seamlessly**
+   - **Pattern**: `read_parquet('data/fnguide/price/**/*.parquet', hive_partitioning=true)`
+   - **Behavior**: DuckDB automatically handles year/month/day folder structure
+   - **Performance**: Fast queries (4-5s for 22 days × 2530 stocks)
+   - **No Special Handling**: Works exactly like single file, just faster
+
+2. **ETL Preprocessing Ensures Clean Data**
+   - **market_cap**: Correctly converted to won (₩) from millions
+   - **is_trading_suspended**: Boolean values (not Korean text)
+   - **is_issue**: Boolean values (not Korean text)
+   - **Data Types**: All numeric fields are proper int/float (no type errors)
+   - **Implication**: alpha-database receives 100% clean data, no preprocessing needed
+
+3. **Monthly vs Daily Data Handled Correctly**
+   - **Daily (price)**: 22 trading days in January 2024
+   - **Monthly (groups)**: 1 data point (end of month) in January 2024
+   - **Time Alignment**: Both use same date column, xarray aligns automatically
+   - **No Issues**: Different frequencies coexist in same config
+
+4. **Low NaN Percentage Validates Quality**
+   - **adj_close**: 0.35% NaN (195 / 55,660 values)
+   - **trading_value**: 0.35% NaN (same as adj_close)
+   - **industry_group**: 0.03% NaN (1 / 3,440 values)
+   - **Interpretation**: NaNs are legitimate (halted stocks, delisted, etc.)
+   - **Data Quality**: ✅ Clean and ready for research
+
+5. **Value Ranges Confirm Correctness**
+   - **adj_close**: 22원 to 919,000원 (reasonable stock prices)
+   - **trading_value**: 0원 to 4.2兆원 (reasonable trading volumes)
+   - **industry_group**: 25 unique categories (reasonable classification count)
+   - **No Outliers**: No obvious data quality issues
+
+#### Implementation Patterns
+
+**Data Configuration (config/data.yaml)**:
+```yaml
+fnguide_adj_close:
+  db_type: parquet
+  table: FNGUIDE_PRICE
+  index_col: date
+  security_col: symbol
+  value_col: adj_close
+  query: >
+    SELECT date, symbol, adj_close 
+    FROM read_parquet('data/fnguide/price/**/*.parquet', hive_partitioning=true)
+    WHERE date >= :start_date AND date <= :end_date
+```
+
+**Loading in Code**:
+```python
+from alpha_database import DataSource
+
+ds = DataSource('config')
+adj_close = ds.load_field('fnguide_adj_close', '2024-01-01', '2024-01-31')
+# Returns: xarray.DataArray with shape (22, 2530)
+```
+
+**Complete Pipeline**:
+```
+DataGuide Excel → ETL Preprocessing → Hive-Partitioned Parquet → alpha-database → xarray.DataArray
+```
+
+#### Lessons Learned
+
+1. **ETL Should Do ALL Preprocessing**
+   - ✅ Correct: Transform market_cap in ETL (millions → won)
+   - ✅ Correct: Convert Korean text to booleans in ETL
+   - ✅ Correct: Enforce data types in ETL
+   - ❌ Wrong: Rely on alpha-database to clean/transform data
+   - **Takeaway**: alpha-database should receive 100% clean, analysis-ready data
+
+2. **Hive Partitioning is Production-Ready**
+   - ✅ Fast enough for research (< 5s for full month)
+   - ✅ Scales to years of data (tested up to 2010-2025)
+   - ✅ Works with both monthly and daily frequencies
+   - ✅ No special code needed in alpha-database
+   - **Takeaway**: Hierarchical partitioning (year/month/day) is the right choice
+
+3. **Configuration is the Integration Layer**
+   - ✅ `data.yaml` decouples ETL output from alpha-canvas usage
+   - ✅ Easy to add new fields (just add YAML config)
+   - ✅ DuckDB SQL gives flexibility (filters, transformations if needed)
+   - ✅ Field names can be user-friendly (fnguide_adj_close)
+   - **Takeaway**: Config-driven approach makes system extensible
+
+4. **Experiment Validation is Critical**
+   - ✅ Caught dimension access bug (`dict(data.dims)` → `data.dims`)
+   - ✅ Verified data types and value ranges
+   - ✅ Confirmed NaN percentages are reasonable
+   - ✅ Validated both price and groups data loads
+   - **Takeaway**: Don't assume configuration works, always validate with experiments
+
+#### Architectural Implications
+
+1. **FnGuide Pipeline is Complete**
+   - Users can now use `Field('fnguide_adj_close')` in expressions
+   - No code changes needed to add more FnGuide fields
+   - Just add config entry + re-run ETL if needed
+
+2. **ETL → Database → Expression Pattern Validated**
+   - This pattern can be reused for other data sources
+   - ETL handles source-specific preprocessing
+   - Database provides unified access layer
+   - Expressions use clean, analysis-ready data
+
+3. **Next Data Sources Should Follow Same Pattern**
+   - Bloomberg: ETL script → Hive-partitioned Parquet → config entry
+   - KRX: ETL script → Hive-partitioned Parquet → config entry
+   - **Consistency**: Same architecture for all external data
+
+#### Evidence
+
+Experiment output showing successful validation:
+```
+✓ fnguide_adj_close validation passed
+  - Shape: (22, 2530) 
+  - NaN: 0.35%
+  - Value range: 22 to 919,000원
+
+✓ fnguide_trading_value validation passed
+  - Shape: (22, 2530)
+  - NaN: 0.35%
+  - Value range: 0 to 4.2조원
+
+✓ fnguide_industry_group validation passed
+  - Shape: (1, 3440)
+  - NaN: 0.03%
+  - 25 unique categories
+```
+
+#### Next Steps
+
+1. **Create Showcase** (Phase 4 of framework)
+   - Demonstrate using FnGuide data in alpha-canvas expressions
+   - Show Field('fnguide_adj_close') in real research workflow
+   - Validate end-to-end user experience
+
+2. **Add More FnGuide Fields** (as needed)
+   - market_cap (from price data)
+   - is_trading_suspended (from price data)
+   - Other price fields (listed_shares_common, float_shares, etc.)
+   - Other classification fields (fn_sector, exchange_sector, etc.)
+
+3. **Document in Architecture** (Living Documents principle)
+   - Update alpha-database architecture doc
+   - Add FnGuide data source documentation
+   - Document ETL → Database integration pattern
+
+---
+
 ## Phase 25: Time-Series Shift Operations (Batch 2)
 
 ### Experiment 25: Shift Operations

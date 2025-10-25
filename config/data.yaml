@@ -79,3 +79,55 @@ returns:
     WHERE date >= :start_date 
       AND date <= :end_date
 
+# ============================================================================
+# FnGuide Real Data (Processed by ETL)
+# ============================================================================
+
+# FnGuide: Adjusted close price (수정주가)
+fnguide_adj_close:
+  db_type: parquet
+  table: FNGUIDE_PRICE
+  index_col: date
+  security_col: symbol
+  value_col: adj_close
+  query: >
+    SELECT 
+      date, 
+      symbol, 
+      adj_close 
+    FROM read_parquet('data/fnguide/price/**/*.parquet', hive_partitioning=true)
+    WHERE date >= :start_date 
+      AND date <= :end_date
+
+# FnGuide: Trading value (거래대금)
+fnguide_trading_value:
+  db_type: parquet
+  table: FNGUIDE_PRICE
+  index_col: date
+  security_col: symbol
+  value_col: trading_value
+  query: >
+    SELECT 
+      date, 
+      symbol, 
+      trading_value 
+    FROM read_parquet('data/fnguide/price/**/*.parquet', hive_partitioning=true)
+    WHERE date >= :start_date 
+      AND date <= :end_date
+
+# FnGuide: Industry group classification (산업 그룹)
+fnguide_industry_group:
+  db_type: parquet
+  table: FNGUIDE_GROUPS
+  index_col: date
+  security_col: symbol
+  value_col: fn_industry_group
+  query: >
+    SELECT 
+      date, 
+      symbol, 
+      fn_industry_group 
+    FROM read_parquet('data/fnguide/groups/**/*.parquet', hive_partitioning=true)
+    WHERE date >= :start_date 
+      AND date <= :end_date
+
