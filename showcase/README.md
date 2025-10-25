@@ -242,6 +242,91 @@ poetry run python showcase/run_all.py
 
 **Key Features**: DataSource injection, dependency injection pattern, automatic field loading, mandatory parameters, loose coupling (alpha-database ↔ alpha-canvas), TDD validated (40 tests passing)
 
+### 19. Expression Serialization (`19_expression_serialization.py`)
+- Serialize Expression trees to dictionaries
+- Deserialize dictionaries back to Expressions
+- Support for all operator types (unary, binary, variadic)
+- Round-trip validation
+- JSON compatibility for storage/transmission
+- Expression tree structure preservation
+
+**Key Features**: Serialization/deserialization, expression persistence, JSON support, tree structure preservation, all operator types supported
+
+### 20. Arithmetic Operators (`20_arithmetic_operators.py`)
+- Binary operators (Add, Sub, Mul, Div, Pow)
+- Unary operators (Abs, Log, Sign, Inverse)
+- Special operators (SignedPower)
+- Variadic operators (Max, Min)
+- Utility operators (ToNan)
+- Python operator overloading (__add__, __sub__, etc.)
+- Composition patterns and nested expressions
+
+**Key Features**: Full arithmetic operator library, Python-native syntax, sign-preserving transformations, variadic support, NaN handling
+
+### 21. Time-Series Rolling Aggregations (`21_ts_rolling_aggregations.py`)
+- TsMax, TsMin: Rolling extrema (breakout/support detection)
+- TsSum: Cumulative metrics (RSI components)
+- TsStdDev: Rolling volatility (Bollinger Bands)
+- TsProduct: Compound returns (geometric means)
+- TsMean: Moving averages (pre-existing)
+- Rolling window pattern with min_periods=window
+- NaN padding at beginning (prevents look-ahead bias)
+
+**Key Features**: Batch 1 operators (5 operators), rolling window aggregations, volatility analysis, technical indicators
+
+### 22. Time-Series Shift Operations (`22_ts_shift_operations.py`)
+- TsDelay: Return value from d days ago (lag operator)
+- TsDelta: Difference between current and d days ago
+- Shift mechanics with xarray.shift()
+- NaN at boundaries (no forward filling)
+- Momentum calculation patterns
+- Change detection
+
+**Key Features**: Batch 2 operators (2 operators), lag operators, momentum indicators, change detection
+
+### 23. Time-Series Index Operations (`23_ts_index_operations.py`)
+- TsArgMax: Days ago when maximum occurred (0=today)
+- TsArgMin: Days ago when minimum occurred (0=today)
+- Relative index calculation ("days ago" format)
+- Custom rolling window logic with .construct()
+- Pattern recognition (breakout timing, reversal timing)
+- NaN handling in windows
+
+**Key Features**: Batch 3 operators (2 operators), index operations, pattern timing, breakout detection
+
+### 24. Time-Series Two-Input Statistics (`24_ts_two_input_stats.py`)
+- TsCorr: Rolling Pearson correlation between two series
+- TsCovariance: Rolling covariance between two series
+- Binary time-series operators (left, right children)
+- Synchronized rolling windows
+- Correlation properties ([-1, 1] range)
+- Beta calculation foundations
+
+**Key Features**: Batch 4 operators (2 operators), correlation analysis, covariance, beta calculation, pair analysis
+
+### 25. Time-Series Special Statistics (`25_ts_special_stats.py`)
+- TsCountNans: Count NaN values in rolling window (data quality)
+- TsRank: Normalized rank of current value [0,1] (momentum/mean-reversion)
+- Custom rolling logic with .construct()
+- NaN exclusion in calculations
+- Rank normalization patterns
+- Data quality monitoring
+
+**Key Features**: Batch 5 operators (2 operators), data quality, normalized ranking, momentum detection
+
+### 26. Group Operators (Cross-Sectional) (`26_group_operators.py`)
+- GroupMax: Maximum value within each group (broadcast to all members)
+- GroupMin: Minimum value within each group (broadcast to all members)
+- GroupNeutralize: Subtract group mean (creates sector-neutral signals, mean=0)
+- GroupRank: Rank within group [0,1] (relative to peers, not entire market)
+- Broadcast aggregation pattern (same value for all group members)
+- Sector-neutral strategy construction
+- Within-group relative strength analysis
+- Composition with other operators (TsMean → GroupRank, GroupNeutralize → Rank)
+- Cross-sectional independence (per time period)
+
+**Key Features**: Group-based operations, sector-neutral strategies, within-group ranking, broadcast aggregation, sector bias removal, industry-relative momentum
+
 ## Expected Output
 
 Each showcase produces detailed terminal output showing:

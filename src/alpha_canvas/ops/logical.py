@@ -3,6 +3,7 @@
 These operators enable Expression-based comparisons and logical operations:
 - Comparison: Equals, NotEquals, GreaterThan, LessThan, GreaterOrEqual, LessOrEqual
 - Logical: And, Or, Not
+- Utility: IsNan
 
 All Boolean Expressions remain lazy until evaluated through Visitor.
 This ensures universe masking is always applied through the Expression system.
@@ -295,3 +296,75 @@ class Not(Expression):
         """
         return ~child_result
 
+
+@dataclass(eq=False)
+class IsNan(Expression):
+    """Check for NaN values element-wise.
+    
+    Returns True where input is NaN, False otherwise.
+    Essential for data quality checks and conditional logic.
+    
+    Args:
+        child: Input Expression to check for NaN
+    
+    Returns:
+        Boolean DataArray (same shape as input)
+        
+    Example:
+        >>> # Identify missing data
+        >>> volume = Field('volume')
+        >>> has_data = ~IsNan(volume)  # Invert to get "has data" mask
+        >>> 
+        >>> # Use with selector interface for conditional signals
+        >>> signal = Constant(0)
+        >>> valid_earnings = ~IsNan(Field('earnings'))
+        >>> signal[valid_earnings] = Field('earnings') / Field('price')
+        >>> 
+        >>> # Combine with other logical operators
+        >>> high_quality = (~IsNan(Field('price'))) & (~IsNan(Field('volume')))
+    
+    Notes:
+        - Checks data quality BEFORE universe masking is applied to result
+        - Universe-masked positions will be NaN (not True) in final result
+        - NaN from data vs NaN from universe masking are treated identically
+        - Useful for filtering valid data before applying operators
+        - Can detect missing data patterns across time/assets
+    
+    Use Cases:
+        - Data quality validation before analysis
+        - Creating "valid data" masks for conditional signals
+        - Identifying missing data patterns (e.g., delisted stocks)
+        - Filtering assets with complete data history
+    
+    Architecture:
+        - Field retrieval applies INPUT MASKING (universe → NaN)
+        - IsNan.compute() checks which values are NaN (pure computation)
+        - Visitor applies OUTPUT MASKING (universe → NaN in boolean result)
+        - Result: Universe-excluded positions are NaN (not True)
+    
+    See Also:
+        - ToNan: Convert specific values to/from NaN
+        - Not: Invert boolean expressions
+    """
+    child: Expression
+    
+    def accept(self, visitor):
+        """Accept visitor for the Visitor pattern."""
+        return visitor.visit_operator(self)
+    
+    def compute(self, child_result: 'xr.DataArray') -> 'xr.DataArray':
+        """Core computation logic for NaN check.
+        
+        Args:
+            child_result: Evaluated child Expression result
+        
+        Returns:
+            Boolean DataArray (True where NaN, False otherwise)
+        
+        Note:
+            Uses xarray's isnan() which follows numpy behavior.
+            This is pure computation - universe masking happens in Visitor.
+        """
+        import xarray as xr
+        import numpy as np
+        return xr.ufuncs.isnan(child_result)

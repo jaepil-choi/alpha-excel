@@ -4,6 +4,244 @@ This document records critical discoveries from experiments, including what work
 
 ---
 
+## Phase 25: Time-Series Shift Operations (Batch 2)
+
+### Experiment 25: Shift Operations
+
+**Date**: 2024-10-24  
+**Status**: ✅ SUCCESS
+
+**Summary**: Implemented and validated 2 shift operators: TsDelay and TsDelta. Both operators use xarray's `.shift()` method for clean, efficient time-series shifting. These are fundamental building blocks for momentum, returns, and differencing calculations.
+
+#### Key Discoveries
+
+1. **xarray .shift() is Perfect for Time-Series**
+   - **Method**: `child_result.shift(time=window)`
+   - **Behavior**: Positive window shifts forward (looks back in time)
+   - **NaN Handling**: Automatically creates NaN at start (first `window` positions)
+   - **No Edge Cases**: Works correctly for all window values (0, 1, >T)
+
+2. **TsDelta Can Be Inline Computed**
+   - **Pattern**: `x - x.shift(time=window)` in single line
+   - **Efficiency**: No need to create intermediate TsDelay expression
+   - **Relationship**: TsDelta(x, d) ≡ x - TsDelay(x, d) verified mathematically
+
+3. **NaN Padding is Correct for Look-Back**
+   - **Forward shift**: First `window` positions are NaN (no previous data)
+   - **Makes sense**: Can't look back `d` days if fewer than `d` days of history
+   - **Prevents look-ahead**: NaN at start ensures no future data contamination
+
+4. **window=0 Edge Case**
+   - **Behavior**: Returns original data unchanged (no shift)
+   - **Use case**: Useful for dynamic window calculations
+   - **Validation**: Verified identical to input
+
+5. **window > T Edge Case**
+   - **Behavior**: Returns all NaN (no data to shift from)
+   - **Correct**: Can't look back 100 days if only 10 days of data
+   - **No errors**: xarray handles gracefully without exceptions
+
+#### Implementation Patterns
+
+Both operators are extremely simple:
+
+**TsDelay**:
+```python
+@dataclass(eq=False)
+class TsDelay(Expression):
+    child: Expression
+    window: int
+    
+    def compute(self, child_result: xr.DataArray) -> xr.DataArray:
+        return child_result.shift(time=self.window)
+```
+
+**TsDelta**:
+```python
+@dataclass(eq=False)
+class TsDelta(Expression):
+    child: Expression
+    window: int
+    
+    def compute(self, child_result: xr.DataArray) -> xr.DataArray:
+        return child_result - child_result.shift(time=self.window)
+```
+
+**Key insight**: Shift operations are even simpler than rolling aggregations - just one line of xarray code.
+
+#### Validation Results
+
+**Test Coverage**:
+- ✅ Basic shift mechanics (delay=1, delay=3)
+- ✅ NaN padding at start (first `window` values)
+- ✅ Difference calculations (constant, increasing, alternating)
+- ✅ Relationship verification: TsDelta ≡ (x - TsDelay(x))
+- ✅ Edge cases: delay=0, delay>T
+
+**Performance**: 0.025s for all 5 test suites (10x3 data) - even faster than Batch 1
+
+#### Use Cases Validated
+
+1. **TsDelay**: 
+   - Get yesterday's price (window=1)
+   - Get price from N days ago (window=N)
+   - Calculate returns: (close / TsDelay(close, 1)) - 1
+
+2. **TsDelta**:
+   - Price change: TsDelta(close, 1)
+   - Momentum: TsDelta(close, N)
+   - Acceleration: TsDelta(TsDelta(close, 1), 1)
+
+#### Architectural Insights
+
+1. **xarray Shift is Production-Ready**
+   - No custom logic needed
+   - NaN handling automatic and correct
+   - Performance excellent
+   - Works for any window value
+
+2. **Simple is Better**
+   - No rolling window complexity
+   - No min_periods parameter needed
+   - Just shift and optionally subtract
+   - Easy to understand and maintain
+
+3. **Fundamental Building Blocks**
+   - TsDelay is used in returns, momentum, mean-reversion
+   - TsDelta is core of change/difference calculations
+   - Both compose well with other operators
+
+#### Mathematical Relationships
+
+Verified:
+- `TsDelta(x, d) = x - TsDelay(x, d)` ✅
+- `TsDelay(x, 0) = x` ✅
+- `TsDelay(TsDelay(x, a), b) = TsDelay(x, a+b)` (composable)
+
+#### Next Steps
+
+**Batch 3**: Index operations (TsArgMax, TsArgMin) - requires custom rolling logic
+**Batch 4**: Two-input stats (TsCorr, TsCovariance) - binary time-series operators
+**Batch 5**: Special stats (TsCountNans, TsRank) - custom aggregations
+
+---
+
+## Phase 24: Time-Series Rolling Aggregations (Batch 1)
+
+### Experiment 24: Simple Rolling Aggregations
+
+**Date**: 2024-10-24  
+**Status**: ✅ SUCCESS
+
+**Summary**: Implemented and validated 5 simple rolling aggregation operators: TsMax, TsMin, TsSum, TsStdDev, TsProduct. All operators follow the same pattern as TsMean, using xarray's `.rolling().method()` API with `min_periods=window` for consistent NaN padding.
+
+#### Key Discoveries
+
+1. **Consistent Implementation Pattern**
+   - **Pattern**: All operators use `child_result.rolling(time=window, min_periods=window).{method}()`
+   - **Methods**: `.max()`, `.min()`, `.sum()`, `.std()`, `.prod()`
+   - **Simplicity**: No custom logic needed - xarray handles everything correctly
+   - **Performance**: Native xarray operations are highly optimized
+
+2. **Standard Deviation: ddof=0 (Population Std)**
+   - **Discovery**: xarray uses `ddof=0` (population standard deviation) by default
+   - **Expected**: `ddof=1` (sample standard deviation)
+   - **Impact**: For window [1,2,3], std = 0.8165 (not 1.0)
+   - **Decision**: Document this behavior in docstring, keep xarray default
+   - **Rationale**: Consistency with xarray conventions, users expect xarray behavior
+
+3. **NaN Propagation Verified**
+   - NaN in input → NaN in all windows containing that position
+   - Example: NaN at t=5 with window=3 → t=5,6,7 all NaN
+   - Consistent across all 5 operators
+   - No manual NaN handling needed in compute() methods
+
+4. **min_periods=window Enforces NaN Padding**
+   - First (window-1) rows always NaN (incomplete windows)
+   - No partial computations on incomplete windows
+   - Matches WorldQuant BRAIN behavior
+   - Critical for backtesting (prevents look-ahead bias)
+
+5. **Polymorphic Design Works Perfectly**
+   - All operators work on time dimension only
+   - Independent computation per asset (no cross-sectional contamination)
+   - Shape preservation: output shape === input shape
+   - Ready for future DataTensor (T, N, N) support
+
+#### Implementation Patterns
+
+All 5 operators follow identical structure:
+
+```python
+@dataclass(eq=False)
+class Ts{Operation}(Expression):
+    """Rolling time-series {operation} operator."""
+    child: Expression
+    window: int
+    
+    def accept(self, visitor):
+        return visitor.visit_operator(self)
+    
+    def compute(self, child_result: 'xr.DataArray') -> 'xr.DataArray':
+        return child_result.rolling(
+            time=self.window,
+            min_periods=self.window
+        ).{method}()
+```
+
+**Method mapping**:
+- TsMax: `.max()`
+- TsMin: `.min()`
+- TsSum: `.sum()`
+- TsStdDev: `.std()`  (ddof=0)
+- TsProduct: `.prod()`
+
+#### Validation Results
+
+**Test Coverage**:
+- ✅ Basic rolling computations (all 5 operators)
+- ✅ NaN padding at start (min_periods=window)
+- ✅ NaN propagation through windows
+- ✅ Edge cases: constant values, alternating patterns
+- ✅ Shape preservation
+- ✅ Asset independence
+
+**Performance**: 0.059s for all 7 test suites (10x5 data)
+
+#### Use Cases Validated
+
+1. **TsMax**: Breakout detection, support levels, channel strategies
+2. **TsMin**: Resistance levels, stop-loss strategies, range identification
+3. **TsSum**: Cumulative metrics, RSI components, volume accumulation
+4. **TsStdDev**: Volatility calculation, Bollinger Bands, risk metrics
+5. **TsProduct**: Compound returns, geometric means, multiplicative metrics
+
+#### Architectural Insights
+
+1. **xarray Integration Is Seamless**
+   - No need for custom rolling window logic
+   - NaN handling automatic and correct
+   - Performance excellent out-of-the-box
+
+2. **Pattern Reusability**
+   - This pattern will work for many more operators
+   - Batch 2-5 should be similarly straightforward
+   - Document pattern once, replicate easily
+
+3. **Visitor Pattern Works Perfectly**
+   - No special handling needed for rolling operators
+   - Generic `visit_operator()` handles all cases
+   - Cache integration automatic
+
+#### Next Steps
+
+**Batch 2**: Shift operations (TsDelay, TsDelta)
+**Batch 3**: Index operations (TsArgMax, TsArgMin)
+**Batch 4**: Two-input stats (TsCorr, TsCovariance)
+**Batch 5**: Special stats (TsCountNans, TsRank)
+
+---
+
 ## Phase 8: ts_any() Operator
 
 ### Experiment 11: Rolling Boolean Window Operations
@@ -2487,5 +2725,1494 @@ data = ds.load_field('adj_close', '2024-01-01', '2024-01-31')
 8. **TODO**: Create integration tests comparing old vs new
 9. **TODO**: Create showcase demonstrating DataSource usage
 10. **TODO**: Eventually integrate DataSource into AlphaCanvas (dependency injection)
+
+---
+
+## Phase 21: Unary Arithmetic Operators
+
+### Experiment 21: Unary Arithmetic Operators (Abs, Log, Sign, Inverse)
+
+**Date**: 2025-10-24  
+**Status**: ✅ COMPLETE
+
+**Summary**: Implemented and validated four unary arithmetic operators (Abs, Log, Sign, Inverse) following the established architecture pattern. All operators use xarray.ufuncs for optimal performance and integrate seamlessly with the Visitor pattern and universe masking.
+
+#### Key Discoveries
+
+1. **xarray.ufuncs are Perfect for Unary Operations**
+   - **Pattern**: `xr.ufuncs.fabs()`, `xr.ufuncs.log()`, `xr.ufuncs.sign()`
+   - **Performance**: Zero overhead vs direct numpy operations
+   - **Benefit**: Automatic broadcasting, NaN handling, and metadata preservation
+   - **Conclusion**: Use xarray.ufuncs for all mathematical transformations
+
+2. **Edge Case Behavior is Well-Defined**
+   - **Abs**: Negative → Positive, Zero → Zero, NaN → NaN (simple, predictable)
+   - **Log**: Negative → NaN, Zero → -inf, Positive → log(x) (numpy standard)
+   - **Sign**: Negative → -1, Zero → 0, Positive → +1, NaN → NaN (direction extraction)
+   - **Inverse**: Zero → inf, NaN → NaN, Double inverse property holds (1/(1/x) = x)
+   - **Finding**: numpy/xarray edge case handling is mathematically sound and practical
+
+3. **NaN Propagation is Automatic**
+   - All operators propagate NaN through operations
+   - No special handling needed in `compute()` methods
+   - xarray.ufuncs handle NaN consistently across all operators
+   - **Benefit**: Predictable behavior, no surprises
+
+4. **Universe Masking Works Automatically**
+   - Unary operators respect OUTPUT MASKING from Visitor
+   - No manual masking needed in operator implementation
+   - Double masking strategy (INPUT + OUTPUT) ensures safety
+   - **Validation**: Experiment confirms masking works with all four operators
+
+5. **Operator Composition is Seamless**
+   - Complex expressions like `Abs(Log(price))` work without special handling
+   - Visitor handles recursive evaluation naturally
+   - Tree traversal pattern scales to any expression complexity
+   - **Evidence**: `Sign(price - Inverse(price))` composes correctly
+
+6. **Documentation Provides Value**
+   - Comprehensive docstrings clarify edge cases (e.g., log(0) → -inf)
+   - Use case examples help users understand when to apply each operator
+   - "See Also" sections guide users to related operators
+   - **Finding**: Rich documentation prevents misuse and aids discovery
+
+#### Implementation Pattern
+
+**Unary Operator Structure**:
+```python
+@dataclass(eq=False)
+class OperatorName(Expression):
+    """One-line description.
+    
+    Detailed behavior explanation.
+    
+    Args:
+        child: Input Expression
+    
+    Returns:
+        DataArray with result (same shape as input)
+    
+    Example:
+        >>> expr = OperatorName(Field('data'))
+        >>> result = rc.evaluate(expr)
+    
+    Notes:
+        - Edge case 1
+        - Edge case 2
+    """
+    child: Expression
+    
+    def accept(self, visitor):
+        return visitor.visit_operator(self)
+    
+    def compute(self, child_result: xr.DataArray) -> xr.DataArray:
+        return xr.ufuncs.function_name(child_result)
+```
+
+**Key Characteristics**:
+- Single `child` parameter (not `left`/`right`)
+- `accept()` delegates to generic `visit_operator()`
+- `compute()` takes single `child_result` argument
+- Uses `xr.ufuncs` for vectorized operations
+- No manual masking or special handling
+
+#### Performance Metrics
+
+**Dataset**: (3, 7) test matrix with various edge cases
+
+| Operator | Compute Time | Overhead vs Direct | Notes |
+|----------|--------------|-------------------|-------|
+| Abs | <1ms | Negligible | Pure `xr.ufuncs.fabs()` |
+| Log | <1ms | Negligible | Handles warnings naturally |
+| Sign | <1ms | Negligible | Simple direction extraction |
+| Inverse | <1ms | Negligible | Standard division (1.0 / x) |
+
+**Conclusion**: Zero meaningful overhead vs direct xarray operations. Expression tree traversal dominates runtime for complex expressions.
+
+#### Edge Case Validation
+
+**Abs Operator**:
+- ✅ `abs(-5) = 5`
+- ✅ `abs(0) = 0`
+- ✅ `abs(5) = 5`
+- ✅ `abs(NaN) = NaN`
+
+**Log Operator**:
+- ✅ `log(1) = 0`
+- ✅ `log(0) = -inf` (with warning)
+- ✅ `log(-1) = NaN` (with warning)
+- ✅ `log(NaN) = NaN`
+
+**Sign Operator**:
+- ✅ `sign(-5) = -1`
+- ✅ `sign(0) = 0`
+- ✅ `sign(5) = 1`
+- ✅ `sign(NaN) = NaN`
+
+**Inverse Operator**:
+- ✅ `1/(-5) = -0.2`
+- ✅ `1/(0) = inf`
+- ✅ `1/(5) = 0.2`
+- ✅ `1/NaN = NaN`
+- ✅ `1/(1/x) = x` (double inverse property)
+
+#### Visitor Integration
+
+All operators work through generic `visit_operator()` pattern:
+
+```python
+# In EvaluateVisitor.visit_operator():
+elif hasattr(node, 'child'):
+    child_result = node.child.accept(self)
+    result = node.compute(child_result)
+```
+
+**Benefits**:
+- No per-operator visitor methods needed
+- Visitor stays lean and scalable
+- Operator owns compute logic (testable in isolation)
+- Generic traversal handles all operator types
+
+#### Architecture Compliance
+
+**✅ All Checklist Items Met**:
+- ✅ `accept()` delegates to `visitor.visit_operator()`
+- ✅ `compute()` contains pure computation logic
+- ✅ No direct Visitor reference in compute
+- ✅ OUTPUT MASKING by Visitor (not operator)
+- ✅ Type hints for all parameters
+- ✅ `eq=False` in `@dataclass`
+- ✅ NaN propagation documented
+- ✅ `compute()` testable in isolation
+- ✅ Pure function (no side effects)
+
+#### Use Cases Demonstrated
+
+**Abs** - Magnitude-based signals:
+```python
+# Volatility signal (symmetrical)
+deviation = price - vwap
+volatility = Abs(deviation)
+```
+
+**Log** - Normalizing skewed distributions:
+```python
+# Log-returns (more symmetric than simple returns)
+log_returns = Log(price / TsDelay(price, 1))
+
+# Normalize market cap
+log_mcap = Log(Field('market_cap'))
+```
+
+**Sign** - Direction extraction:
+```python
+# Binary momentum signal
+direction = Sign(Field('returns'))  # -1, 0, or +1
+
+# Long/short from complex signal
+signal = Sign(momentum_factor)
+```
+
+**Inverse** - Ratio inversion:
+```python
+# P/E ratio → Earnings yield
+pe_ratio = price / earnings
+earnings_yield = Inverse(pe_ratio)
+```
+
+#### Lessons Learned
+
+1. **Always Use Expression-Visitor Pattern (CRITICAL)**
+   - ❌ **NEVER** call `operator.compute(data)` directly in experiments
+   - ✅ **ALWAYS** use `visitor.evaluate(Expression)` instead
+   - **Why**: Direct `compute()` bypasses universe masking, caching, and visitor lifecycle
+   - **How**: Create Dataset → Create Visitor → Create Expression → evaluate()
+   - **Finding**: Initial experiment called `compute()` directly (architectural violation)
+
+2. **xarray.ufuncs are the Right Abstraction**
+   - Handle all edge cases correctly
+   - Preserve coordinates and metadata
+   - Zero performance overhead
+   - Consistent API across operations
+
+3. **Generic Visitor Pattern Scales**
+   - Adding 4 operators required zero Visitor changes
+   - `hasattr(node, 'child')` check is sufficient
+   - Pattern will scale to 50+ operators without complexity growth
+
+4. **Documentation Matters for Edge Cases**
+   - Users need to know `log(0) → -inf` vs `log(-1) → NaN`
+   - Examples clarify when to use each operator
+   - Comprehensive docstrings prevent misuse
+
+5. **Experiment-First Validates Design**
+   - All operators worked on first try (no bugs found)
+   - Edge cases validated before production use
+   - Terminal output provides audit trail
+
+6. **Composition Just Works**
+   - `Abs(Log(price))` required no special handling
+   - Tree traversal handles arbitrary nesting
+   - Visitor pattern pays dividends for complex expressions
+
+#### Next Steps
+
+**Phase 1 Complete** ✅:
+- [x] Abs, Log, Sign, Inverse implemented
+- [x] Unit tests pass (direct compute validation)
+- [x] Integration tests pass (Visitor + universe masking)
+- [x] Edge cases validated
+- [x] Experiment documented
+
+**Phase 2 Next** 🔨:
+- [ ] Implement `SignedPower(base, exponent)` (HIGH priority)
+- [ ] Validate sign preservation across edge cases
+- [ ] Compare with regular power (show sign loss)
+- [ ] Document use case: returns compression with direction preservation
+
+**Phase 3 Planned** 📋:
+- [ ] Implement `Max(operands)` and `Min(operands)` (MEDIUM priority)
+- [ ] Solve variadic args challenge (tuple-based solution)
+- [ ] Visitor special case for tuple evaluation
+- [ ] Validate xr.concat + max/min strategy
+
+**Documentation Updates**:
+- [x] FINDINGS.md (this entry)
+- [x] arithmetic.py module docstring updated
+- [x] ops/__init__.py exports updated
+- [ ] Showcase example (TODO: create showcase/21_arithmetic_unary.py)
+- [ ] Update ac-ops.md Phase 1 status to COMPLETE
+
+---
+
+## Phase 22: Arithmetic Operators Phase 2-4 (SignedPower, Max, Min, ToNan)
+
+### Experiment 22: Complete Arithmetic Operator Implementation
+
+**Date**: 2025-10-24  
+**Status**: ✅ COMPLETE
+
+**Summary**: Implemented 4 remaining arithmetic operators (SignedPower, Max, Min, ToNan) and refactored visitor architecture to handle group-by operations generically and support variadic operators. All operators integrate seamlessly with existing Expression-Visitor pattern.
+
+#### Key Discoveries
+
+1. **Visitor Refactoring Enables Scalability**
+   - **Problem**: CsQuantile had special-case handling for `group_by` parameter
+   - **Solution**: Extracted group_by logic to be generic for ANY operator with `group_by` attribute
+   - **Benefit**: Future group operators (group_max, group_min, group_mean, etc.) get support automatically
+   - **Pattern**: Check `hasattr(node, 'group_by')` at top of `visit_operator()`, look up from dataset
+   - **Result**: No more operator-specific special cases for group operations
+
+2. **Variadic Pattern is Third Generic Pattern**
+   - **Pattern 1**: Unary (has `child`) → `compute(child_result)`
+   - **Pattern 2**: Binary (has `left`/`right` or `base`/`exponent`) → `compute(left, right?)`
+   - **Pattern 3**: Variadic (has `operands` tuple) → `compute(*operand_results)`
+   - **Key insight**: Variadic is NOT "special" - it's just another pattern in the if/elif chain
+   - **Implementation**: `if hasattr(node, 'operands'): results = [op.accept(self) for op in node.operands]`
+   - **Benefit**: Max/Min get same OUTPUT MASKING + caching as all other operators
+
+3. **SignedPower is Essential for Returns Data**
+   - **Problem**: Regular power `(-9) ** 0.5 = NaN` loses sign information
+   - **Solution**: `sign(x) * |x|^y` preserves direction
+   - **Use case**: Compressing return distributions: SignedPower(returns, 0.5) reduces outliers while keeping long/short signal
+   - **Example**: Input [-9, -4, 0, 4, 9] → Output [-3, -2, 0, 2, 3] (signed square root)
+   - **Alternative**: Regular power produces [NaN, NaN, 0, 2, 3] (direction lost!)
+   - **Finding**: Critical operator for quantitative finance (returns-based alphas)
+
+4. **Max/Min Require Tuple Syntax**
+   - **Syntax**: `Max((a, b, c))` NOT `Max(a, b, c)`
+   - **Reason**: Dataclass field must be single attribute (not *args)
+   - **Validation**: `__post_init__` enforces ≥2 operands
+   - **Implementation**: `operands: tuple[Expression, ...]` then `compute(*operand_results)`
+   - **Common use**: `Max((signal, Constant(0)))` - floor at 0, `Min((signal, Constant(1)))` - cap at 1
+   - **NaN propagation**: `skipna=False` ensures any NaN contaminates result (mathematically correct)
+
+5. **ToNan Provides Bidirectional Conversion**
+   - **Forward mode**: `value → NaN` (mark sentinel values as missing)
+   - **Reverse mode**: `NaN → value` (fill missing with default)
+   - **Use case**: Cleaning: `ToNan(volume, value=0)` marks zero volume as missing
+   - **Use case**: Filling: `ToNan(signal, value=0, reverse=True)` replaces NaN with 0
+   - **Round-trip property**: `ToNan(ToNan(x, v, False), v, True) = x` (verified in experiment)
+   - **Flexibility**: `value` parameter supports any sentinel (-999, 0, etc.)
+
+6. **Composition Works Seamlessly**
+   - **Example 1**: `Max(SignedPower(a, 0.5), Min(b, c))` - complex nested expression
+   - **Example 2**: `Min(Max(signal, lower), upper)` - range limiting
+   - **Finding**: All operators compose without special handling
+   - **Reason**: Tree traversal naturally handles arbitrary nesting
+   - **Benefit**: Users can build complex expressions declaratively
+
+#### Visitor Architecture Evolution
+
+**Before (CsQuantile-specific)**:
+```python
+if isinstance(node, CsQuantile):
+    # Special case: look up group_by field
+    group_labels = self._data[node.group_by] if node.group_by else None
+    result = node.compute(child_result, group_labels)
+```
+
+**After (Generic)**:
+```python
+# Generic: ANY operator can have group_by
+group_labels = None
+if hasattr(node, 'group_by') and node.group_by is not None:
+    group_labels = self._data[node.group_by]
+
+# Then handle different patterns
+if hasattr(node, 'operands'):  # Variadic
+    results = [op.accept(self) for op in node.operands]
+    result = node.compute(*results, group_labels) if group_labels else node.compute(*results)
+elif hasattr(node, 'child'):  # Unary
+    child_result = node.child.accept(self)
+    result = node.compute(child_result, group_labels) if group_labels else node.compute(child_result)
+elif hasattr(node, 'left') and hasattr(node, 'right'):  # Binary
+    # ... (handles Expression vs literal)
+elif hasattr(node, 'base') and hasattr(node, 'exponent'):  # Binary (power-like)
+    # ... (handles Expression vs literal)
+```
+
+**Benefits**:
+- Future group operators automatically supported
+- No operator-specific special cases
+- Clean separation of concerns (pattern matching vs group_by lookup)
+- All patterns share OUTPUT MASKING + caching flow
+
+#### Implementation Patterns
+
+**SignedPower (Binary with base/exponent)**:
+```python
+@dataclass(eq=False)
+class SignedPower(Expression):
+    base: Expression
+    exponent: Union[Expression, Any]
+    
+    def compute(self, base_result: xr.DataArray, exp_result: Any = None) -> xr.DataArray:
+        exponent = exp_result if exp_result is not None else self.exponent
+        sign = xr.ufuncs.sign(base_result)
+        abs_val = xr.ufuncs.fabs(base_result)
+        return sign * (abs_val ** exponent)
+```
+
+**Max/Min (Variadic)**:
+```python
+@dataclass(eq=False)
+class Max(Expression):
+    operands: tuple[Expression, ...]
+    
+    def __post_init__(self):
+        if len(self.operands) < 2:
+            raise ValueError("Max requires at least 2 operands")
+    
+    def compute(self, *operand_results: xr.DataArray) -> xr.DataArray:
+        stacked = xr.concat(operand_results, dim='__operand__')
+        return stacked.max(dim='__operand__', skipna=False)
+```
+
+**ToNan (Unary with optional parameters)**:
+```python
+@dataclass(eq=False)
+class ToNan(Expression):
+    child: Expression
+    value: float = 0.0
+    reverse: bool = False
+    
+    def compute(self, child_result: xr.DataArray) -> xr.DataArray:
+        if not self.reverse:
+            return child_result.where(child_result != self.value, float('nan'))
+        else:
+            return child_result.fillna(self.value)
+```
+
+#### Performance Metrics
+
+**Dataset**: Various sizes tested in experiment
+
+| Operator | Time | Implementation | Notes |
+|----------|------|----------------|-------|
+| SignedPower | <1ms | sign * (abs ** exp) | 3 vectorized ops |
+| Max (3 operands) | <1ms | xr.concat + max | Stacking overhead minimal |
+| Min (3 operands) | <1ms | xr.concat + min | Stacking overhead minimal |
+| ToNan | <1ms | where or fillna | Native xarray methods |
+
+**Conclusion**: All operators have negligible overhead. Variadic operators use stacking but remain fast for reasonable operand counts (<10).
+
+#### Edge Case Validation
+
+**SignedPower**:
+- ✅ `SignedPower(-9, 0.5) = -3` (sign preserved)
+- ✅ `SignedPower(0, 0.5) = 0` (zero stays zero)
+- ✅ `SignedPower(9, 0.5) = 3` (positive works)
+- ✅ `SignedPower(-16, 2) = -256` (works with any exponent)
+- ✅ Expression as exponent works
+
+**Max/Min**:
+- ✅ 2 operands: `Max((a, b))`
+- ✅ 3+ operands: `Max((a, b, c))`
+- ✅ NaN propagation: any NaN → result NaN
+- ✅ Tuple validation: single operand raises ValueError
+- ✅ Mixed types: `Max((Field('x'), Constant(0)))`
+
+**ToNan**:
+- ✅ Forward: 0 → NaN
+- ✅ Reverse: NaN → 0
+- ✅ Round-trip: `forward → reverse = original`
+- ✅ Custom value: `ToNan(x, value=3)` works
+- ✅ Only exact matches converted
+
+**Universe Masking**:
+- ✅ SignedPower respects universe mask
+- ✅ Max respects universe mask
+- ✅ Min respects universe mask
+- ✅ ToNan respects universe mask
+- ✅ OUTPUT MASKING applied automatically
+
+#### Use Case Demonstrations
+
+**SignedPower - Returns Compression**:
+```python
+# Compress returns while preserving long/short direction
+returns = Field('returns')
+compressed = SignedPower(returns, 0.5)  # Signed square root
+# Large returns become smaller, small returns stay small, sign preserved
+```
+
+**Max - Signal Flooring**:
+```python
+# Ensure signal is non-negative (long-only strategy)
+signal = Field('momentum')
+long_only = Max((signal, Constant(0)))  # Floor at 0
+```
+
+**Min - Signal Capping**:
+```python
+# Cap signal at maximum exposure
+signal = Field('value_score')
+capped = Min((signal, Constant(1.0)))  # Cap at 1.0
+```
+
+**Range Limiting**:
+```python
+# Limit signal to [-2, 2] range
+signal = Field('zscore')
+limited = Min((Max((signal, Constant(-2))), Constant(2)))
+```
+
+**ToNan - Data Cleaning**:
+```python
+# Mark zero volume as missing (likely data error)
+volume = Field('volume')
+clean_volume = ToNan(volume, value=0)  # 0 → NaN
+
+# Fill missing prices with previous close
+prices = Field('prices')
+filled = ToNan(prices, value=last_close, reverse=True)  # NaN → value
+```
+
+#### Lessons Learned
+
+1. **Generic Patterns > Special Cases**
+   - Refactoring CsQuantile special case to generic group_by pattern was correct decision
+   - Future group operators get support for free
+   - Visitor stays lean and maintainable
+   - Pattern: "Check attribute, not isinstance()"
+
+2. **Variadic is NOT Special**
+   - Max/Min fit naturally into visitor's pattern matching
+   - `hasattr(node, 'operands')` is sufficient
+   - All operators share OUTPUT MASKING + caching
+   - No need for "special case" section
+
+3. **Tuple Syntax is Clear**
+   - `Max((a, b, c))` makes operand grouping explicit
+   - Prevents ambiguity: `Max(a, b, c)` could be misread
+   - Validation in `__post_init__` catches errors early
+   - Python requires tuple for variadic dataclass fields anyway
+
+4. **SignedPower Fills Critical Gap**
+   - Regular power inadequate for financial data
+   - Sign preservation essential for returns-based signals
+   - Common pattern: compress outliers with SignedPower(x, <1)
+   - Users will heavily rely on this operator
+
+5. **Documentation Prevents Misuse**
+   - Comprehensive docstrings explain edge cases
+   - Examples show common use patterns
+   - Warnings about NaN propagation, memory usage, etc.
+   - "See Also" sections guide users to related operators
+
+6. **Experiment Validates Architecture**
+   - All operators worked on first try after visitor refactoring
+   - Universe masking worked automatically
+   - Composition worked without special handling
+   - Experiment-driven development pays dividends
+
+#### Next Steps
+
+**All Arithmetic Operators Complete** ✅:
+- [x] Phase 1: Unary (Abs, Log, Sign, Inverse)
+- [x] Phase 2: SignedPower
+- [x] Phase 3: Max, Min
+- [x] Phase 4: ToNan
+- [x] Visitor refactoring (generic group_by, variadic pattern)
+- [x] Comprehensive validation (exp_22)
+- [x] Documentation updated
+
+**Future Work**:
+- [ ] Group operators (group_max, group_min, group_mean) - visitor already supports them
+- [ ] Logical operators expansion (if_else, case/when)
+- [ ] Time-series operators expansion
+- [ ] Cross-sectional operators expansion
+- [ ] Showcase examples demonstrating real-world use cases
+
+**Documentation Updates**:
+- [x] FINDINGS.md (this entry)
+- [x] arithmetic.py module docstring updated  
+- [x] ops/__init__.py exports updated
+- [x] Visitor refactored with generic patterns
+- [x] Update ac-ops.md phases 2-4 to COMPLETE
+- [ ] Create showcase examples
+
+---
+
+## Phase 23: IsNan Logical Operator
+
+### Experiment 23: IsNan Operator Implementation
+
+**Date**: 2025-10-24  
+**Status**: ✅ COMPLETE
+
+**Summary**: Implemented `IsNan` logical operator to complete WQ BRAIN logical operator parity (excluding `if_else` which is replaced by selector interface). Validated critical universe masking behavior: IsNan checks data quality first, then OUTPUT MASKING ensures universe-excluded positions are NaN (not True).
+
+#### Key Discoveries
+
+1. **Universe Masking Order is Critical**
+   - **Architecture**: IsNan.compute() checks for NaN BEFORE Visitor applies OUTPUT MASKING
+   - **Result**: Universe-masked positions → NaN in boolean result (not True)
+   - **Why it matters**: Prevents universe-excluded positions from being counted as "missing data"
+   - **Example**: If position [0, 4] is outside universe, `IsNan(field)[0, 4]` returns NaN (not True)
+   - **Finding**: This is NOT a subtle design decision - it's architecturally critical
+
+2. **If_Else is Obsolete in Alpha-Canvas**
+   - **WQ BRAIN**: `if_else(condition, true_value, false_value)` for conditional logic
+   - **Alpha-canvas**: Use selector interface instead (Pythonic, more powerful)
+   - **Reason**: PRD emphasizes selector interface as key differentiator
+   - **Pattern**:
+     ```python
+     # WQ: if_else(condition, 1.0, -1.0)
+     # Alpha-canvas:
+     signal = Constant(0)
+     signal[condition] = 1.0
+     signal[~condition] = -1.0
+     ```
+   - **Benefit**: More flexible, composable, Pythonic
+
+3. **IsNan Completes Logical Operator Set**
+   - **Already implemented**: All comparison operators (==, !=, >, <, >=, <=)
+   - **Already implemented**: All logical operators (And, Or, Not)
+   - **Missing from WQ**: Only `is_nan()` was missing
+   - **Now complete**: All essential logical operators implemented
+   - **Not implementing**: `if_else` (use selector interface instead)
+
+4. **Composition with Other Logical Operators**
+   - **Pattern**: `~IsNan(field)` creates "has valid data" mask
+   - **Pattern**: `(~IsNan(field1)) & (~IsNan(field2))` finds positions with both fields valid
+   - **Use case**: Data quality filtering before applying operators
+   - **Use case**: Conditional signals with selector interface
+   - **Finding**: Seamlessly integrates with existing And/Or/Not operators
+
+5. **Data Quality Validation Use Case**
+   - **Application**: Identify missing data patterns across time/assets
+   - **Application**: Count missing days per asset
+   - **Application**: Filter assets with incomplete data history
+   - **Application**: Detect delisting events (continuous NaN sequences)
+   - **Pattern**: `IsNan(field).sum(dim='time')` counts missing days per asset
+
+#### Implementation Pattern
+
+```python
+@dataclass(eq=False)
+class IsNan(Expression):
+    """Check for NaN values element-wise.
+    
+    Returns True where input is NaN, False otherwise.
+    Essential for data quality checks and conditional logic.
+    
+    Notes:
+        - Checks data quality BEFORE universe masking is applied to result
+        - Universe-masked positions will be NaN (not True) in final result
+    """
+    child: Expression
+    
+    def accept(self, visitor):
+        return visitor.visit_operator(self)
+    
+    def compute(self, child_result: xr.DataArray) -> xr.DataArray:
+        import xarray as xr
+        return xr.ufuncs.isnan(child_result)
+```
+
+#### Architecture: Universe Masking Flow
+
+**Execution order:**
+1. **Field retrieval**: INPUT MASKING (universe → NaN in field data)
+2. **IsNan.compute()**: Pure NaN check (checks which values are NaN)
+3. **Visitor**: OUTPUT MASKING (universe → NaN in boolean result)
+4. **Result**: Universe-excluded positions are NaN (NOT True)
+
+**Example:**
+```
+Field data:     [1.0, NaN, 3.0, 4.0, 5.0]
+Universe mask:  [T,   T,   T,   F,   F  ]
+After INPUT:    [1.0, NaN, 3.0, NaN, NaN]  (positions 3,4 masked)
+IsNan result:   [F,   T,   F,   T,   T  ]  (pure NaN check)
+After OUTPUT:   [F,   T,   F,   NaN, NaN] (positions 3,4 masked in result)
+                                ^    ^
+                                Universe-masked → NaN (correct!)
+```
+
+#### Edge Case Validation
+
+**Basic NaN detection:**
+- ✅ Correctly identifies NaN values in data
+- ✅ Returns False for valid (non-NaN) values
+- ✅ NaN values propagate correctly
+
+**Universe masking:**
+- ✅ Universe-excluded positions → NaN in result (NOT True)
+- ✅ In-universe NaN values → True (correct detection)
+- ✅ Distinction preserved: data NaN vs universe NaN
+
+**Composition:**
+- ✅ `~IsNan(field)` creates "has valid data" mask
+- ✅ `And(~IsNan(f1), ~IsNan(f2))` finds positions with both valid
+- ✅ Works seamlessly with other logical operators
+
+**Selector interface:**
+- ✅ Generates boolean masks for conditional signals
+- ✅ Pattern: `signal[~IsNan(earnings)] = earnings / price`
+- ✅ Integrates with selector interface philosophy
+
+#### Use Case Demonstrations
+
+**Use Case 1: Data Quality Validation**
+```python
+# Identify missing data
+volume = Field('volume')
+is_missing = IsNan(volume)
+
+# Count missing days per asset
+missing_count = is_missing.sum(dim='time')
+
+# Filter assets with complete data
+complete_data_mask = (missing_count == 0)
+```
+
+**Use Case 2: Conditional Signals with Selector Interface**
+```python
+# Only compute P/E where earnings exist
+signal = Constant(0)
+has_earnings = ~IsNan(Field('earnings'))
+signal[has_earnings] = Field('price') / Field('earnings')
+```
+
+**Use Case 3: Multi-field Validation**
+```python
+# Find positions where ALL fields have valid data
+price_valid = ~IsNan(Field('price'))
+volume_valid = ~IsNan(Field('volume'))
+earnings_valid = ~IsNan(Field('earnings'))
+
+complete_data = price_valid & volume_valid & earnings_valid
+```
+
+**Use Case 4: Delisting Detection**
+```python
+# Identify assets that have been delisted (continuous NaN)
+is_missing = IsNan(Field('price'))
+consecutive_missing = is_missing.rolling(time=20).sum()
+likely_delisted = consecutive_missing >= 20  # 20 consecutive missing days
+```
+
+#### Performance Metrics
+
+**Dataset**: Various sizes tested in experiment
+
+| Test | Time | Notes |
+|------|------|-------|
+| Basic IsNan | <1ms | Pure xarray.ufuncs.isnan() |
+| With universe masking | <1ms | Standard OUTPUT MASKING overhead |
+| Composition (And/Not) | <1ms | Multiple operator evaluations |
+| Data quality aggregation | <5ms | With sum(dim='time') |
+
+**Conclusion**: IsNan has negligible overhead. Uses xarray's optimized isnan() ufunc.
+
+#### Lessons Learned
+
+1. **Universe Masking Order is Architecturally Critical**
+   - User explicitly confirmed: "NOT subtle, very important question"
+   - IsNan checks data quality → Visitor applies OUTPUT MASKING
+   - Universe-excluded positions must be NaN (not True) in result
+   - This prevents confusion between missing data and excluded positions
+
+2. **Selector Interface Replaces if_else**
+   - Alpha-canvas philosophy: explicit, Pythonic, composable
+   - `signal[condition] = value` more powerful than `if_else()`
+   - Aligns with PRD's emphasis on selector interface as key feature
+   - No need to implement WQ's `if_else` operator
+
+3. **IsNan Completes Logical Operator Set**
+   - All comparison operators: ✅ Done
+   - All logical operators: ✅ Done
+   - Utility operator (IsNan): ✅ Done
+   - No further logical operators needed from WQ BRAIN
+
+4. **Data Quality is a First-Class Concern**
+   - IsNan essential for pre-processing checks
+   - Integrates seamlessly with selector interface
+   - Enables sophisticated data quality validation
+   - Critical for production-ready quant research
+
+5. **Documentation Prevents Misuse**
+   - Explicitly documented universe masking behavior
+   - Architecture section explains execution flow
+   - Use case examples show practical patterns
+   - Edge cases thoroughly tested and documented
+
+#### Next Steps
+
+**Logical Operators Complete** ✅:
+- [x] All comparison operators (==, !=, >, <, >=, <=)
+- [x] All logical operators (And, Or, Not)
+- [x] IsNan utility operator
+- [x] Validation experiment (exp_23)
+- [x] Documentation updated
+
+**Future Work**:
+- Time-series operators expansion
+- Cross-sectional operators expansion  
+- Group operators (visitor already supports them)
+- Transformational operators
+
+**Documentation Updates**:
+- [x] FINDINGS.md (this entry)
+- [x] logical.py module docstring updated
+- [x] ops/__init__.py exports updated
+- [x] Experiment validates architecture
+
+---
+
+## Phase 26: Time-Series Index Operations (Batch 3)
+
+### Experiment 26: Index Operations
+
+**Date**: 2024-10-24  
+**Status**: ✅ SUCCESS
+
+**Summary**: Implemented and validated 2 index operators: TsArgMax and TsArgMin. These operators return "days ago" when the maximum/minimum occurred within a rolling window (0 = today, 1 = yesterday, etc.). Critical for identifying breakout/selloff freshness and mean-reversion signals.
+
+#### Key Discoveries
+
+1. **Relative Index Calculation is Core**
+   - **Formula**: `days_ago = window_length - 1 - absolute_idx`
+   - **Meaning**: Converts numpy's absolute index (0=oldest) to "days ago" (0=newest)
+   - **Example**: In window [1,2,3,4,5], max is at abs_idx=4 → days_ago=0 (today)
+   - **Example**: In window [5,4,3,2,1], max is at abs_idx=0 → days_ago=4 (oldest)
+
+2. **xarray .rolling().construct() is Required**
+   - **Method**: `.rolling(time=window, min_periods=window).construct('time_window')`
+   - **Creates**: New dimension 'time_window' with actual window data
+   - **Shape**: (T, N, window) where last dimension is the rolling window
+   - **Enables**: Custom aggregation logic beyond built-in methods (max/min/sum)
+   - **No .apply()**: xarray DataArrayRolling doesn't have .apply() method
+   - **No .reduce()**: .reduce() passes extra kwargs that break custom functions
+
+3. **Manual Iteration is Necessary**
+   - **Pattern**: Iterate over time and asset dimensions explicitly
+   - **Why**: np.nanargmax operates on 1D arrays, can't broadcast over window dimension
+   - **Loop Structure**: `for time_idx, for asset_idx, compute argmax on window_vals`
+   - **Performance**: Acceptable for alpha research (not HFT), clear and maintainable
+
+4. **np.nanargmax/nanargmin Handle NaN Correctly**
+   - **Behavior**: Ignore NaN values, find max/min among valid data
+   - **Edge Case**: All-NaN window → leave result as NaN
+   - **Edge Case**: Empty window → leave result as NaN
+   - **Critical**: Must check `len(window_vals) == 0 or np.all(np.isnan(window_vals))`
+
+5. **Tie Behavior is Important**
+   - **np.argmax behavior**: Returns FIRST occurrence among ties
+   - **Interpretation**: Oldest among tied values
+   - **Example**: Window [1,5,3,5,2] has two 5's at indices 1 and 3
+   - **Result**: argmax returns 1 (oldest '5') → days_ago=3
+   - **Alternative**: For most recent tie, would need custom logic (not implemented)
+
+6. **min_periods=window Ensures Correct NaN Padding**
+   - **First (window-1) values**: NaN (incomplete windows)
+   - **Prevents look-ahead**: Cannot compute argmax without full window
+   - **Consistent**: Same pattern as other rolling operators
+
+#### Implementation Patterns
+
+Both operators follow identical structure:
+
+**TsArgMax**:
+```python
+@dataclass(eq=False)
+class TsArgMax(Expression):
+    child: Expression
+    window: int
+    
+    def compute(self, child_result: xr.DataArray) -> xr.DataArray:
+        import xarray as xr
+        import numpy as np
+        
+        # Create rolling window views
+        windows = child_result.rolling(
+            time=self.window, 
+            min_periods=self.window
+        ).construct('time_window')
+        
+        # Initialize result with NaN
+        result = xr.full_like(windows.isel(time_window=-1), np.nan, dtype=float)
+        
+        # Compute argmax for each window
+        for time_idx in range(windows.sizes['time']):
+            for asset_idx in range(windows.sizes['asset']):
+                window_vals = windows.isel(time=time_idx, asset=asset_idx).values
+                
+                # Handle empty/NaN windows
+                if len(window_vals) == 0 or np.all(np.isnan(window_vals)):
+                    continue
+                
+                # Find argmax and convert to relative index
+                abs_idx = np.nanargmax(window_vals)
+                rel_idx = len(window_vals) - 1 - abs_idx
+                result[time_idx, asset_idx] = float(rel_idx)
+        
+        return result
+```
+
+**TsArgMin**: Identical except uses `np.nanargmin` instead of `np.nanargmax`.
+
+#### Practical Applications
+
+1. **Breakout Detection**
+   ```python
+   # Only trade when high is very recent
+   days_since_high = TsArgMax(Field('close'), 20)
+   fresh_breakout = days_since_high <= 2  # High within last 2 days
+   ```
+
+2. **Mean Reversion**
+   ```python
+   # Look for stocks far from recent high
+   days_since_high = TsArgMax(Field('close'), 20)
+   stale_high = days_since_high > 15  # High was > 15 days ago
+   mean_revert_candidate = stale_high & (price < high_20d * 0.95)
+   ```
+
+3. **Bounce Signals**
+   ```python
+   # Recent low + price recovery
+   days_since_low = TsArgMin(Field('close'), 20)
+   low_20d = TsMin(Field('close'), 20)
+   bounce = (days_since_low <= 3) & (price > low_20d * 1.02)
+   ```
+
+4. **Support/Resistance Age**
+   ```python
+   # How fresh is the support/resistance level?
+   days_to_high = TsArgMax(Field('high'), 60)
+   days_to_low = TsArgMin(Field('low'), 60)
+   # Use to weight importance of levels
+   ```
+
+#### Architectural Implications
+
+**Pattern Established for Custom Aggregations**
+- `.rolling().construct()` is the way to do custom rolling logic
+- Manual iteration is acceptable for alpha research
+- This pattern will be reused for other complex operators (ts_rank, ts_corr, etc.)
+
+**Performance Considerations**
+- Python loops are not ideal for performance
+- But: alpha research prioritizes correctness and clarity
+- Future optimization: Could use numba or cython if needed
+- For now: Clarity > speed
+
+**NaN Handling is Consistent**
+- All rolling operators use `min_periods=window`
+- All use np.nan* functions that ignore NaN
+- Consistent behavior across the operator library
+
+#### Testing Validation
+
+✅ **Relative Index Calculation**: Correct for all window positions  
+✅ **xarray Integration**: .rolling().construct() works as expected  
+✅ **NaN Handling**: Correctly ignores NaN, returns NaN for empty windows  
+✅ **Tie Handling**: Returns first (oldest) occurrence consistently  
+✅ **Multi-Asset**: Independent computation per asset  
+✅ **min_periods**: First (window-1) values are NaN  
+
+#### Lessons Learned
+
+1. **xarray Rolling API Constraints**
+   - **No .apply() method**: Must use .construct() + manual iteration
+   - **Takeaway**: For custom logic, .construct() is the way
+
+2. **Performance vs Clarity Tradeoff**
+   - **Python loops are slow**: But acceptable for research
+   - **Takeaway**: Optimize only if profiling shows bottleneck
+
+3. **Tie Behavior Matters**
+   - **First vs Last**: np.argmax returns first, might want last
+   - **Takeaway**: Document tie behavior clearly in docstrings
+
+4. **Index Semantics are Non-Obvious**
+   - **"Days ago" is clearer**: Than absolute indices
+   - **Takeaway**: Use domain-appropriate naming (0=today, not 0=oldest)
+
+#### Files Modified
+
+- [x] src/alpha_canvas/ops/timeseries.py: Added TsArgMax, TsArgMin
+- [x] src/alpha_canvas/ops/__init__.py: Exported new operators
+- [x] timeseries.py module docstring updated
+- [x] Experiment 26 validates implementation
+
+---
+
+## Phase 27: Time-Series Two-Input Statistics (Batch 4)
+
+### Experiment 27: Two-Input Statistical Operators
+
+**Date**: 2024-10-24  
+**Status**: ✅ SUCCESS
+
+**Summary**: Implemented and validated 2 two-input statistical operators: TsCorr and TsCovariance. These operators compute rolling Pearson correlation and covariance between two time series, enabling pairs trading, factor analysis, and portfolio risk calculations.
+
+#### Key Discoveries
+
+1. **Pearson Correlation Formula is Core**
+   - **Formula**: `corr(X,Y) = cov(X,Y) / (std(X) * std(Y))`
+   - **Range**: [-1, +1] normalized
+   - **Interpretation**: +1 = perfect positive, -1 = perfect negative, 0 = no linear relationship
+   - **Zero Variance**: If std(X) or std(Y) is zero, correlation is undefined (return NaN)
+
+2. **Covariance Formula**
+   - **Formula**: `cov(X,Y) = E[(X - μ_X)(Y - μ_Y)]`
+   - **Not Normalized**: Depends on input scales
+   - **Sign**: +ve = same direction, -ve = opposite direction
+   - **Relationship**: `cov(X,Y) = corr(X,Y) * std(X) * std(Y)`
+
+3. **Binary Time-Series Pattern**
+   - **Two Expression Children**: `left` and `right` (not child)
+   - **Aligned Windows**: Both inputs must use same window size
+   - **Visitor Support**: Already handles `left/right` pattern (from arithmetic operators)
+   - **compute() Signature**: `def compute(self, left_result, right_result)`
+
+4. **Rolling Window Alignment**
+   - **Both Construct**: `.rolling().construct('window')` on both inputs
+   - **Synchronized**: Windows are automatically aligned by time coordinate
+   - **NaN Propagation**: NaN in either input → NaN output
+   - **Min Periods**: Both use `min_periods=window` for consistent NaN padding
+
+5. **Population vs Sample Statistics**
+   - **Population Formula**: `np.std(ddof=0)` and `np.mean()` (divide by N)
+   - **Consistency**: Matches xarray's default behavior
+   - **Rationale**: For rolling windows, we use all available data in window (population)
+
+#### Use Cases Enabled
+
+1. **Pairs Trading**
+   - Identify co-moving pairs via correlation
+   - Detect breakdowns in correlation structure
+   
+2. **Beta Calculation**
+   - Formula: beta = cov(asset, market) / var(market)
+   - Use TsCovariance for numerator and denominator
+   
+3. **Factor Exposure**
+   - Correlation with factor returns = factor loading
+   - Risk attribution to factors
+   
+4. **Portfolio Risk**
+   - Covariance matrix for variance calculation
+   - Identify uncorrelated assets for diversification
+
+#### Validation Results
+
+**Test 1: Perfect Positive Correlation**
+- Data: X = [1,2,3,4,5], Y = [2,4,6,8,10] (Y = 2*X)
+- Expected: corr = +1.0
+- Actual: corr = +1.0
+- ✓ PASS
+
+**Test 2: Perfect Negative Correlation**
+- Data: X = [10,9,8,7,6], Y = [-10,-9,-8,-7,-6] (Y = -X)
+- Expected: corr = -1.0
+- Actual: corr = -1.0
+- ✓ PASS
+
+**Test 3: Covariance Formula**
+- Verify: cov = corr * std(X) * std(Y)
+- Values: cov = 1.0 * 1.414 * 2.828 = 4.0
+- Actual: cov = 4.0
+- ✓ PASS
+
+**Test 4: Zero Correlation**
+- Data: X increasing, Z alternating [1,-1,1,-1,1]
+- Expected: corr ≈ 0
+- Actual: corr = 0.0
+- ✓ PASS
+
+**Test 5: NaN Propagation**
+- Insert NaN at position 7
+- Windows 8-11: NaN (contain position 7)
+- Windows 6-7: Valid (before NaN)
+- ✓ PASS
+
+#### Lessons Learned
+
+1. **Binary Time-Series Operators**
+   - Pattern: `left/right` children like arithmetic operators
+   - Visitor: Existing infrastructure handles two-input operators
+   - Takeaway: No special visitor logic needed
+
+2. **Edge Case Handling**
+   - Zero Variance: Must check before division
+   - NaN Propagation: Explicit checks cleaner than pandas style
+   - Takeaway: Document edge cases in docstrings
+
+3. **Population vs Sample**
+   - Rolling Windows: Use all data in window (population)
+   - ddof=0: Matches xarray default
+   - Takeaway: Consistency with ecosystem is important
+
+#### Files Modified
+
+- [x] src/alpha_canvas/ops/timeseries.py: Added TsCorr, TsCovariance
+- [x] src/alpha_canvas/ops/__init__.py: Exported new operators
+- [x] timeseries.py module docstring updated
+- [x] Experiment 27 validates implementation
+- [x] FINDINGS.md (this entry)
+
+---
+
+## Phase 28: Time-Series Special Statistics (Batch 5)
+
+### Experiment 28: Special Statistical Operators
+
+**Date**: 2024-10-24  
+**Status**: ✅ SUCCESS
+
+**Summary**: Implemented and validated 2 special statistical operators: TsCountNans and TsRank. TsCountNans counts NaN values for data quality monitoring, while TsRank computes normalized ranks [0,1] for momentum and mean-reversion signals. This completes the time-series operator implementation (13 operators total).
+
+#### Key Discoveries
+
+1. **TsCountNans Implementation is Simple**
+   - **Formula**: `isnull().astype(float).rolling().sum()`
+   - **Efficiency**: Leverages xarray's optimized rolling operations
+   - **Output**: Integer count (0 to window)
+   - **No NaN Propagation**: Counts NaN, doesn't propagate them
+
+2. **TsRank Normalization**
+   - **Formula**: `rank = count(values < current) / (valid_count - 1)`
+   - **Range**: [0.0, 1.0] where 0=lowest, 0.5=median, 1=highest
+   - **Current Value**: Always included in ranking calculation
+   - **Single Value**: Returns 0.5 (neutral)
+
+3. **Tie Handling Strategy**
+   - **Strict Inequality**: Uses `<` not `<=`
+   - **Lower Bound**: Conservative ranking
+   - **Example**: [1,2,3,3,3] with current=3 → count=2 (only values 1,2 are < 3) → rank=2/4=0.5
+
+4. **NaN Exclusion from Ranking**
+   - **Valid Values Only**: `valid_vals = window_vals[~np.isnan(window_vals)]`
+   - **Current NaN**: Output is NaN (cannot rank)
+   - **Window NaN**: Excluded from both counting and normalization
+
+5. **Use Cases Enabled**
+   - **TsCountNans**: Data quality monitoring, signal validity, trading filters
+   - **TsRank**: Time-series momentum, mean reversion, breakout detection
+   - **Comparison**: TsRank (time) vs Rank (cross-section)
+
+#### Implementation Patterns
+
+**TsCountNans** (Simple):
+```python
+@dataclass(eq=False)
+class TsCountNans(Expression):
+    child: Expression
+    window: int
+    
+    def compute(self, child_result: xr.DataArray):
+        is_nan = child_result.isnull().astype(float)
+        return is_nan.rolling(time=self.window, min_periods=self.window).sum()
+```
+
+**TsRank** (Manual Iteration):
+```python
+@dataclass(eq=False)
+class TsRank(Expression):
+    child: Expression
+    window: int
+    
+    def compute(self, child_result: xr.DataArray):
+        windowed = child_result.rolling(...).construct('window')
+        result = xr.full_like(child_result, np.nan, dtype=float)
+        
+        for time_idx, asset_idx:
+            window_vals = windowed.isel(...).values
+            current = window_vals[-1]
+            
+            if np.isnan(current):
+                continue
+            
+            valid_vals = window_vals[~np.isnan(window_vals)]
+            if len(valid_vals) <= 1:
+                result[...] = 0.5
+                continue
+            
+            rank = np.sum(valid_vals < current)
+            result[...] = rank / (len(valid_vals) - 1)
+        
+        return result
+```
+
+#### Validation Results
+
+**Test 1-3: TsCountNans**
+- ✓ Single NaN counting (window [1,2,NaN,4,5] → 1)
+- ✓ Multiple NaN counting (window [NaN,NaN,8,9,10] → 2)
+- ✓ xarray implementation matches manual
+
+**Test 4-5: TsRank Extremes**
+- ✓ Highest rank=1.0 (monotonic increasing, current=max)
+- ✓ Lowest rank=0.0 (monotonic decreasing, current=min)
+
+**Test 6-7: TsRank Edge Cases**
+- ✓ NaN excluded from ranking (valid only)
+- ✓ Ties handled via strict <
+
+**Test 8: xarray Implementation**
+- ✓ Matches manual calculation
+
+#### Use Cases Demonstrated
+
+1. **Data Quality Monitoring (TsCountNans)**
+   - Count missing data points
+   - Filter signals by data completeness
+   - Calculate data coverage percentage
+
+2. **Time-Series Momentum (TsRank)**
+   - High rank (>0.8) = recent strength
+   - Low rank (<0.2) = recent weakness
+   - Rank=1.0 = new high (breakout)
+
+3. **Mean Reversion Signals (TsRank)**
+   - Extreme ranks (>0.95 or <0.05) = reversal candidates
+   - Compare to historical distribution
+
+4. **Time vs Cross-Sectional Comparison**
+   - TsRank: Rank within time window (momentum)
+   - Rank (cross-section): Rank across assets (relative strength)
+
+#### Lessons Learned
+
+1. **TsCountNans is Elegant**
+   - Leverages xarray's rolling operations
+   - No manual iteration needed
+   - Takeaway: Use built-in operators when possible
+
+2. **Rank Normalization Matters**
+   - [0,1] range enables thresholding (>0.8, <0.2)
+   - 0.5 neutral point for single-value edge case
+   - Takeaway: Normalize to interpretable ranges
+
+3. **Tie Handling Must Be Consistent**
+   - Strict < gives lower bound (conservative)
+   - Alternative: Use <= for upper bound
+   - Takeaway: Document tie behavior clearly
+
+4. **NaN Handling Flexibility**
+   - TsCountNans: Counts NaN (useful)
+   - TsRank: Excludes NaN (necessary)
+   - Takeaway: Different operators need different NaN strategies
+
+#### Files Modified
+
+- [x] src/alpha_canvas/ops/timeseries.py: Added TsCountNans, TsRank
+- [x] src/alpha_canvas/ops/__init__.py: Exported new operators
+- [x] timeseries.py module docstring updated
+- [x] Experiment 28 validates implementation
+- [x] FINDINGS.md (this entry)
+
+**Completion Note**: This concludes the time-series operator implementation plan. **13 operators implemented across 5 batches**.
+
+---
+
+## Phase 29-30: Group Operators (Cross-Sectional)
+
+**Date**: 2024-10-24  
+**Status**: ✅ COMPLETE
+
+### Objective
+
+Implement 4 group operators from WQ BRAIN: GroupMax, GroupMin, GroupNeutralize, GroupRank. These operators perform cross-sectional analysis and transformations within groups of instruments.
+
+### Key Discoveries
+
+#### 1. Group Operations Are Broadcast Aggregations
+
+**Pattern**: Aggregate within group, then broadcast result to all members.
+
+```python
+# Example: GroupMax
+signal = [1, 3, 5, 3, 4, 6, 7]
+group  = [g1, g1, g1, g1, g2, g2, g2]
+
+# Group 1 (first 4): max([1,3,5,3]) = 5
+# Group 2 (last 3): max([4,6,7]) = 7
+# Broadcast to all members:
+result = [5, 5, 5, 5, 7, 7, 7]
+```
+
+**Critical Insight**: All members of a group receive the **same aggregated value**. This is fundamentally different from operations like rank that preserve individual values.
+
+#### 2. Group Operators vs CsQuantile
+
+**Similarity**: Both use `group_by` parameter for group field lookup.
+
+**Difference**:
+- **CsQuantile**: Returns **different labels** per member (categorical)
+- **Group operators**: Return **same aggregated value** per member (numeric)
+
+**Architectural Win**: Generic `group_by` handling in Visitor works for both patterns!
+
+```python
+# In visit_operator() - already implemented
+if hasattr(node, 'group_by') and node.group_by is not None:
+    group_labels = self._data[node.group_by]
+    result = node.compute(child_result, group_labels)
+```
+
+#### 3. NaN Handling Strategy
+
+**Aggregation**: Ignore NaN during computation (use `np.nanmax`, `np.nanmin`, `np.nanmean`).
+
+**Position Preservation**: Preserve NaN in output where input was NaN.
+
+```python
+# Example with NaN
+signal = [1, 3, NaN, 3, 4, 6, 7]
+group  = [g1, g1, g1, g1, g2, g2, g2]
+
+# Aggregation ignores NaN: max([1, 3, NaN, 3]) = 3 (ignoring NaN)
+# But position 2 had NaN → preserve it
+result = [3, 3, NaN, 3, 7, 7, 7]
+```
+
+**Implementation Pattern**:
+```python
+group_max = np.nanmax(data[mask])  # Ignore NaN in aggregation
+result[mask] = group_max
+result[np.isnan(data)] = np.nan  # Preserve NaN positions
+```
+
+#### 4. Universe Masking Interaction
+
+**Critical Behavior**: Excluded positions don't participate in group aggregation.
+
+```python
+# Example
+signal   = [1, 3, 5, 3, 4, 6, 7]
+group    = [g1, g1, g1, g1, g2, g2, g2]
+universe = [T, T, F, T, T, F, T]  # Exclude positions 2, 5
+
+# INPUT MASKING: Positions 2, 5 become NaN before group operation
+# Group 1 in-universe: [1, 3, NaN, 3] → max = 3 (ignoring NaN)
+# Group 2 in-universe: [4, NaN, 7] → max = 7 (ignoring NaN)
+result = [3, 3, NaN, 3, 7, NaN, 7]
+```
+
+**Why This Matters**: Ensures group statistics only reflect investable universe.
+
+#### 5. GroupNeutralize Mathematical Property
+
+**Guarantee**: After neutralization, each group has **exactly zero mean**.
+
+```python
+signal = [1, 3, 5, 3, 4, 6, 7]
+group  = [g1, g1, g1, g1, g2, g2, g2]
+
+# Group 1 mean = (1+3+5+3)/4 = 3.0
+# Group 2 mean = (4+6+7)/3 = 5.667
+
+neutralized = [-2, 0, 2, 0, -1.67, 0.33, 1.33]
+
+# Verification:
+mean([−2, 0, 2, 0]) = 0.0 ✓
+mean([−1.67, 0.33, 1.33]) = 0.0 ✓
+```
+
+**Use Case**: Essential for sector-neutral strategies.
+
+#### 6. GroupRank Normalization
+
+**Pattern**: Rank within group, normalize to [0, 1].
+
+```python
+signal = [1, 3, 5, 3, 4, 6, 7]
+group  = [g1, g1, g1, g1, g2, g2, g2]
+
+# Group 1: [1, 3, 5, 3]
+#   Sorted: [1, 3, 3, 5]
+#   Ranks (0-based): 1→0, 3→1.5 (avg), 5→3
+#   Normalized [0,1]: 0/(4-1)=0, 1.5/(4-1)=0.5, 3/(4-1)=1.0
+#   Result: [0, 0.5, 1.0, 0.5]
+
+# Group 2: [4, 6, 7]
+#   Sorted: [4, 6, 7]
+#   Ranks: 4→0, 6→1, 7→2
+#   Normalized: 0/(3-1)=0, 1/(3-1)=0.5, 2/(3-1)=1.0
+#   Result: [0, 0.5, 1.0]
+
+result = [0.0, 0.5, 1.0, 0.5, 0.0, 0.5, 1.0]
+```
+
+**Tie Handling**: Uses `scipy.stats.rankdata(method='average')`.
+
+**Edge Case**: Single value in group → rank = 0.5 (middle of range).
+
+### Implementation Patterns
+
+#### Cross-Sectional Independence
+
+**Key Pattern**: Process each time period independently.
+
+```python
+def compute(self, child_result, group_labels):
+    result = xr.full_like(child_result, np.nan)
+    
+    # Independent per time
+    for t_idx in range(child_result.sizes['time']):
+        data_slice = child_result.isel(time=t_idx)
+        group_slice = group_labels.isel(time=t_idx)
+        
+        result[t_idx, :] = group_operation(data_slice, group_slice)
+    
+    return result
+```
+
+**Why**: Group statistics should reflect cross-sectional relationships at each point in time.
+
+#### Broadcast Pattern
+
+**Generic Template** for all aggregation operators (Max, Min, Mean):
+
+```python
+def group_aggregate_at_time(data_slice, group_slice):
+    result = xr.full_like(data_slice, np.nan)
+    
+    for group_val in np.unique(group_slice.values):
+        mask = group_slice == group_val
+        group_data = data_slice.where(mask, drop=False)
+        
+        # Aggregate (max, min, mean, etc.)
+        aggregated = group_data.AGG_FUNCTION(skipna=True)
+        
+        # Broadcast to all members
+        result = result.where(~mask, aggregated.values)
+    
+    # Preserve NaN positions
+    result = result.where(~data_slice.isnull())
+    
+    return result
+```
+
+### Performance Notes
+
+**Manual Iteration**: Current implementation uses explicit time loop.
+
+**Why Not Vectorized**: Group operations with broadcasting require per-time logic (groupby limitations in xarray).
+
+**Performance**: Acceptable for research purposes (~ms per time period).
+
+**Future Optimization**: Could explore xarray groupby tricks, but clarity > speed for research code.
+
+### Architecture Integration
+
+**Zero Visitor Changes**: Generic `group_by` handling already implemented for CsQuantile works perfectly for group operators.
+
+**Cache Behavior**: Group field (looked up via `group_by`) is **not cached** in Expression tree (not traversed, only referenced).
+
+**Universe Masking**: Automatic via OUTPUT MASKING in Visitor.
+
+### Use Cases Validated
+
+1. **Group Leaders/Laggards** (GroupMax/Min)
+   - Identify best/worst performers within sectors
+   - Create relative strength indicators
+
+2. **Sector-Neutral Strategies** (GroupNeutralize)
+   - Remove sector bias from signals
+   - Isolate security-specific alpha
+   - Reduce correlation between signals
+
+3. **Within-Group Ranking** (GroupRank)
+   - Rank stocks within sectors (not across entire market)
+   - Balanced signals across industries
+   - Reduce impact of sector-specific outliers
+
+4. **Composition**
+   - Can combine with other operators seamlessly
+   - Example: `GroupNeutralize(TsMean(Field('returns'), 20), group_by='sector')`
+
+### Files Modified
+
+- [x] **NEW**: `src/alpha_canvas/ops/group.py` (4 operators: GroupMax, GroupMin, GroupNeutralize, GroupRank)
+- [x] `src/alpha_canvas/ops/__init__.py`: Export group operators
+- [x] `experiments/exp_29_group_operators.py`: Logic validation (manual)
+- [x] `experiments/exp_30_group_operators_integration.py`: Full Expression-Visitor integration
+- [x] FINDINGS.md (this entry)
+
+### Lessons Learned
+
+1. **Broadcast Aggregations Are a Pattern**
+   - GroupMax, GroupMin follow same template
+   - Only the aggregation function changes
+   - Takeaway: Template-driven design reduces errors
+
+2. **Group Field Is Metadata, Not Data**
+   - Group field referenced by name, not traversed
+   - Not part of Expression tree, not cached
+   - Takeaway: Distinction between data and metadata matters
+
+3. **Universe + Groups = Powerful**
+   - Universe excludes positions **before** group aggregation
+   - Group statistics reflect only investable positions
+   - Takeaway: Double masking strategy extends naturally
+
+4. **Rank Normalization Enables Comparison**
+   - GroupRank [0,1] per group vs Rank [0,1] cross-sectional
+   - Both use same range → easy to combine/compare
+   - Takeaway: Consistent normalization is API design
+
+5. **Generic Visitor Pattern Pays Off**
+   - No visitor changes needed for 4 new operators
+   - `group_by` handling works for multiple use cases
+   - Takeaway: Good abstraction scales effortlessly
+
+### Completion Milestone
+
+**Group Operators Complete**: 4 operators implemented and validated.
+
+**Total Operator Count**: 42 operators
+- Arithmetic: 13
+- Logical: 10
+- Time-Series: 15
+- Group: 4
+
+**Next**: Cross-sectional operators (Scale, Normalize, etc.)
 
 ---

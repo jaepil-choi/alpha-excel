@@ -6,12 +6,19 @@ alwaysApply: true
 
 ## Core Philosophy
 
-**Never code blindly. Always experiment, validate, document, then implement.**
+**Never code blindly. Always experiment, validate, document, implement, then showcase.**
 
 This framework combines two critical methodologies:
 
 1. **Experiment-Driven**: Validate assumptions with real data before writing production code
 2. **Document-Driven**: Treat documents as living artifacts that guide and validate all work
+
+The complete workflow cycle:
+1. **Experiment** (`experiments/`) → Test hypotheses in isolation
+2. **Document** (`FINDINGS.md`, architecture docs) → Record discoveries  
+3. **Test** (`tests/`) → Define expected behavior (TDD)
+4. **Implement** (`src/`) → Write production code following architecture
+5. **Showcase** (`showcase/`) → Demonstrate integrated, high-level API usage
 
 This prevents architectural mistakes and ensures we understand the actual system behavior, not our assumptions about it.
 
@@ -88,27 +95,31 @@ Maintain three foundational documents that guide all development:
 
 ### Integration with Experiments
 
-**Experiment findings MUST flow into documents:**
+**Experiment findings MUST flow into documents and showcases:**
 
 1. **Run Experiment** → Discover how system actually works
 2. **Document Findings** → Record in findings document
 3. **Update Architecture** → If design assumptions were wrong
 4. **Update Implementation** → If methodology needs adjustment
-5. **Implement Code** → Following updated documents
+5. **Write Tests** → Based on experiment findings
+6. **Implement Code** → Following updated documents
+7. **Create Showcase** → Demonstrate high-level API usage
 
 **Example Flow:**
 ```
-Experiment 10: Discovered XML structure is flat, not nested
+Experiment 24: Validated ts_rolling aggregation operators
     ↓
-Update FINDINGS.md: Document flat structure discovery
+Update FINDINGS.md: Document rolling pattern discovery
     ↓
-Update architecture.md: Revise XML parsing module design
+Update architecture.md: Add rolling operator design patterns
     ↓
-Update implementation.md: Add flat structure handling patterns
+Write tests based on rolling aggregation behavior
     ↓
-Write tests based on flat structure
+Implement ts_sum, ts_std, ts_min, ts_max operators
     ↓
-Implement parser following updated architecture
+Create showcase/21_ts_rolling_aggregations.py
+    ↓
+Update showcase/README.md with new showcase entry
 ```
 
 ### Validation Checklist
@@ -121,6 +132,8 @@ Before merging any code, verify:
 - [ ] Are documents updated to reflect any changes?
 - [ ] Are experiment findings properly documented?
 - [ ] Do tests validate documented behavior?
+- [ ] Is there a showcase demonstrating the high-level API?
+- [ ] Is the showcase listed in `showcase/README.md`?
 
 ## Development Workflow
 
@@ -134,12 +147,21 @@ Before merging any code, verify:
    - **CRITICAL**: Include extensive terminal output using `print()` statements
    - Output should be detailed enough for an LLM to understand what's happening
    - Include timing measurements, counts, sample data, and validation checks
+   - **Fake data allowed**: You can create fake/mock data inline for testing
+   - **Always print fake data**: Show the generated data and its progression so reviewers can verify correctness
 
 2. **Make Experiments Observable**
    ```python
-   # GOOD: Verbose, LLM-readable output
+   # GOOD: Verbose, LLM-readable output with fake data
    print("="*60)
-   print(f"Testing hypothesis: {hypothesis}")
+   print("Creating fake test data...")
+   fake_data = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
+   print(f"  Shape: {fake_data.shape}")
+   print(f"  Data:\n{fake_data}")
+   
+   print(f"\nTesting hypothesis: {hypothesis}")
+   result = some_function(fake_data)
+   print(f"  Result:\n{result}")
    print(f"Expected: {expected}")
    print(f"Actual: {actual}")
    if actual == expected:
@@ -150,8 +172,9 @@ Before merging any code, verify:
    ```
 
    ```python
-   # BAD: Silent execution
-   result = some_function()  # No output, LLM can't see what happened
+   # BAD: Silent execution without showing data
+   fake_data = np.array([[1.0, 2.0, 3.0]])  # Not printed!
+   result = some_function(fake_data)  # No output, LLM can't see what happened
    ```
 
 3. **Document Findings**
@@ -231,6 +254,112 @@ Before merging any code, verify:
    - If requirements clarify → update prd.md
    - If methodology improves → update implementation.md
    - Keep documents synchronized with reality
+
+### Phase 4: Showcase
+
+**Goal**: Demonstrate high-level API usage with integrated, production-ready examples.
+
+**Critical Distinction**:
+- **Experiments** (`experiments/`): Isolated, low-level testing of specific hypotheses
+  - Tests internal implementation details
+  - Validates "does this approach work?"
+  - May use internal imports and private APIs
+  - Focus: Technical validation
+  
+- **Tests** (`tests/`): Automated verification of behavior
+  - Verifies correctness of implementation
+  - Runs in CI/CD pipeline
+  - Focus: Regression prevention
+  
+- **Showcases** (`showcase/`): Integrated, high-level demonstrations of complete workflows
+  - Demonstrates public API that users will actually use
+  - Shows realistic, end-to-end usage patterns
+  - Serves as living documentation and examples
+  - Focus: User experience and API design validation
+
+1. **Create Showcase Script**
+   - Place in `showcase/` directory with sequential naming: `XX_descriptive_name.py`
+   - Demonstrate the **public API** that users will actually use
+   - Show **complete workflows** from start to finish
+   - Focus on **usability** and **real-world scenarios**
+   - **No inline fake data**: Always load data from files (even if the files contain fake data)
+   - **Load actual configs**: Use real config files, data loaders, and other production components
+   - **Demonstrate real usage**: Show users how they would actually use the system in practice
+
+2. **Showcase Structure**
+   - Import from the main package (not internal modules)
+   - Use high-level facades and convenience functions
+   - Show typical usage patterns and common operations
+   - Include multiple related use cases in one showcase
+   - Demonstrate integration with other components
+
+3. **Showcase Content Guidelines**
+   - **Start simple**: Basic usage first
+   - **Build complexity**: Gradually show advanced features
+   - **Show alternatives**: Different ways to accomplish tasks
+   - **Include edge cases**: How to handle common issues
+   - **Demonstrate best practices**: Pythonic, idiomatic usage
+
+4. **Make Showcases Observable**
+   ```python
+   # GOOD: User-focused demonstration with real data loading
+   print("\n" + "="*60)
+   print("SHOWCASE: Time-Series Rolling Mean")
+   print("="*60)
+   
+   # Show typical user workflow
+   print("\n[1] Load configuration and data")
+   from alpha_canvas import AlphaCanvas
+   from alpha_database import DataSource
+   
+   data_source = DataSource()
+   rc = AlphaCanvas(
+       start_date="2020-01-01",
+       end_date="2020-12-31",
+       data_source=data_source
+   )
+   
+   print("\n[2] Create expression using loaded data")
+   expr = rc.ts_mean(rc.data['close'], window=20)
+   
+   print("\n[3] Evaluate expression")
+   result = rc.evaluate(expr)
+   
+   print("\n[4] Inspect results")
+   print(f"  Shape: {result.shape}")
+   print(f"  First 5 values: {result.values[0, :5]}")
+   
+   print("\n[SUCCESS] Complete workflow demonstrated")
+   ```
+
+   ```python
+   # BAD: Inline fake data in showcase
+   print("\n[1] Create fake data")
+   fake_data = np.array([[1.0, 2.0, 3.0]])  # Don't do this in showcases!
+   expr = rc.ts_mean(fake_data, window=20)  # Users won't use data this way
+   ```
+
+5. **Documentation Integration**
+   - Maintain a `showcase/README.md` listing all showcases
+   - For each showcase, document:
+     - What features it demonstrates
+     - Key API patterns shown
+     - Expected output characteristics
+     - Related showcases
+   - Update the README when adding new showcases
+
+6. **Showcase vs. Example**
+   - **Showcase**: Complete, runnable demonstration scripts
+   - **Example**: Code snippets in documentation/docstrings
+   - Showcases can be referenced in documentation
+   - Showcases serve as living examples that are tested
+
+7. **When to Create Showcases**
+   - After implementing a new feature or module
+   - When a significant workflow is complete
+   - To demonstrate integration between components
+   - To validate that the public API is intuitive
+   - To serve as reference for users and documentation
 
 ## Key Principles
 
@@ -409,6 +538,68 @@ KEY TAKEAWAY:
 """
 ```
 
+### Showcase Script Template
+
+```python
+"""
+Showcase XX: [Descriptive Name]
+
+Demonstrates: [What features/workflows this showcases]
+
+Key Features:
+- [Feature 1]
+- [Feature 2]
+- [Feature 3]
+"""
+
+def main():
+    print("="*60)
+    print("SHOWCASE: [Name]")
+    print("="*60)
+    
+    # Section 1: Setup - Load real data/config
+    print("\n[1] Setup - Loading data and configuration")
+    # Import production components
+    from alpha_canvas import AlphaCanvas
+    from alpha_database import DataSource
+    
+    # Load data (even if it's fake data, load it from files)
+    data_source = DataSource()
+    rc = AlphaCanvas(
+        start_date="2020-01-01",
+        end_date="2020-12-31",
+        data_source=data_source
+    )
+    print("  ✓ Data loaded successfully")
+    
+    # Section 2: Basic Usage
+    print("\n[2] Basic Usage - [Description]")
+    # ... user-focused code using loaded data ...
+    print("  ✓ Basic workflow complete")
+    
+    # Section 3: Advanced Features
+    print("\n[3] Advanced Features - [Description]")
+    # ... demonstrate more complex usage ...
+    print("  ✓ Advanced features demonstrated")
+    
+    # Section 4: Integration
+    print("\n[4] Integration - [Description]")
+    # ... show how it works with other components ...
+    print("  ✓ Integration validated")
+    
+    # Section 5: Edge Cases
+    print("\n[5] Edge Cases - [Description]")
+    # ... demonstrate handling of edge cases ...
+    print("  ✓ Edge cases handled correctly")
+    
+    print("\n" + "="*60)
+    print("[SUCCESS] All features showcased successfully")
+    print("="*60)
+
+if __name__ == '__main__':
+    main()
+```
+
 ## Anti-Patterns to Avoid
 
 ### ❌ Debugging in the Dark
@@ -431,6 +622,18 @@ KEY TAKEAWAY:
 - Adding caching before measuring performance
 - Creating abstractions before patterns emerge
 
+### ❌ Skipping Showcases
+- "The tests are good enough documentation"
+- "Users can read the code to understand usage"
+- Implementing features without demonstrating integrated workflows
+- Creating showcases that only test internal APIs instead of public APIs
+
+### ❌ Incorrect Data Handling
+- **In Experiments**: Creating fake data but not printing it out for verification
+- **In Showcases**: Creating inline fake data instead of loading from files
+- **In Showcases**: Hardcoding data instead of using production data loaders
+- **In Showcases**: Skipping config loading to "simplify" the example
+
 ## When to Experiment
 
 **Always experiment when:**
@@ -451,11 +654,12 @@ KEY TAKEAWAY:
 ### An Experiment is Successful When:
 1. ✅ Hypothesis is validated (or disproven with clear explanation)
 2. ✅ Terminal output clearly shows what happened
-3. ✅ Findings are documented with code examples
-4. ✅ Performance metrics are recorded
-5. ✅ Edge cases are identified
-6. ✅ Tests can be written based on experiment results
-7. ✅ **Documents are updated to reflect discoveries**
+3. ✅ **Fake data (if used) is printed and observable**
+4. ✅ Findings are documented with code examples
+5. ✅ Performance metrics are recorded
+6. ✅ Edge cases are identified
+7. ✅ Tests can be written based on experiment results
+8. ✅ **Documents are updated to reflect discoveries**
 
 ### An Implementation is Successful When:
 1. ✅ All tests pass (green)
@@ -465,6 +669,18 @@ KEY TAKEAWAY:
 5. ✅ **Documents are updated if patterns changed**
 6. ✅ No architectural drift from documented design
 7. ✅ Experiment findings are incorporated correctly
+
+### A Showcase is Successful When:
+1. ✅ Demonstrates the public API (not internal implementation)
+2. ✅ Shows complete, realistic workflows from start to finish
+3. ✅ **Loads data from files (no inline fake data creation)**
+4. ✅ **Uses real config files and production components**
+5. ✅ Runs without errors and produces expected output
+6. ✅ Terminal output is clear and user-friendly
+7. ✅ Demonstrates integration with other components
+8. ✅ Includes both basic and advanced usage patterns
+9. ✅ Serves as living documentation that users can reference
+10. ✅ Listed and documented in `showcase/README.md`
 
 Remember: **Failed experiments that teach us something are successful experiments.**
 Remember: **Code that doesn't match documents means either the code or the docs need updating.**
@@ -496,6 +712,12 @@ This framework is optimized for AI pair programming:
 - Request document updates based on discoveries
 - Verify documents reflect new learnings
 
+**After implementation:**
+- Ask AI to create a showcase demonstrating the feature
+- Request showcase to focus on public API, not internal implementation
+- Verify showcase demonstrates complete, realistic workflows
+- Update `showcase/README.md` with new entry
+
 **AI Prompt Examples:**
 ```
 "Before implementing X, read @prd.md, @architecture.md, and @implementation.md 
@@ -506,4 +728,11 @@ new understanding, then implement following the updated design."
 
 "Does this implementation follow the patterns in @implementation.md? 
 If not, should we update the implementation or the document?"
+
+"Create a showcase for the ts_rolling operators. It should demonstrate the 
+public API using rc.ts_sum(), rc.ts_std(), etc. Show basic usage, then 
+integration with other operators. Focus on user-friendly workflows."
+
+"Update showcase/README.md to include the new showcase. Document what features 
+it demonstrates, the key API patterns shown, and expected output."
 ```
