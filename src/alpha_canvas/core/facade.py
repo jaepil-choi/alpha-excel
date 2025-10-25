@@ -111,70 +111,33 @@ class AlphaCanvas:
         # Initialize DataAccessor for rc.data property
         self._data_accessor = DataAccessor()
         
-        # Initialize universe mask (immutable once set)
+        # Initialize universe mask (will be set during panel initialization)
         self._universe_mask: Optional[xr.DataArray] = None
+        
+        # CRITICAL: Load returns FIRST (mandatory for all cases)
+        returns_data = self._load_returns()
+        
+        # Initialize panel based on universe or returns
         if universe is not None:
+            # Path 1: Panel follows universe → reindex returns
+            self._initialize_panel_from_universe(universe, returns_data)
+            # Set universe mask after panel initialization
             self._set_initial_universe(universe)
-        
-        # Load return data (MANDATORY for backtesting)
-        self._returns: Optional[xr.DataArray] = None
-        self._load_returns_data()
-    
-    def _set_initial_universe(self, universe: Union[Expression, xr.DataArray]) -> None:
-        """Set universe mask at initialization (one-time only).
-        
-        Args:
-            universe: Expression (e.g., Field('univ500')) or boolean DataArray
-        
-        Raises:
-            ValueError: If universe shape doesn't match data shape
-            TypeError: If universe is not boolean dtype
-        """
-        # Evaluate if Expression
-        if isinstance(universe, Expression):
-            universe_data = self._evaluator.evaluate(universe)
         else:
-            universe_data = universe
-        
-        # Validate shape (only if panel is already initialized)
-        if self._panel is not None:
-            expected_shape = (
-                len(self._panel.db.coords['time']), 
-                len(self._panel.db.coords['asset'])
-            )
-            if universe_data.shape != expected_shape:
-                raise ValueError(
-                    f"Universe mask shape {universe_data.shape} doesn't match "
-                    f"data shape {expected_shape}"
-                )
-        
-        # Validate dtype
-        if universe_data.dtype != bool:
-            raise TypeError(f"Universe must be boolean, got {universe_data.dtype}")
-        
-        # Store as immutable
-        self._universe_mask = universe_data
-        
-        # Pass to evaluator for auto-application
-        self._evaluator._universe_mask = self._universe_mask
+            # Path 2: Panel follows returns → no reindex needed
+            self._initialize_panel_from_returns(returns_data)
     
-    def _load_returns_data(self):
-        """Load return data from config (mandatory for backtesting).
+    def _load_returns(self) -> xr.DataArray:
+        """Load returns data from DataSource.
+        
+        Called once at initialization. Returns are mandatory for backtesting.
+        
+        Returns:
+            Returns DataArray with (time, asset) dimensions
         
         Raises:
             ValueError: If 'returns' field not found in config
-            ValueError: If returns data shape doesn't match panel
-        
-        Note:
-            - Returns are loaded once at initialization
-            - Stored in self._returns for backtest calculations
-            - Field name is hardcoded as 'returns'
         """
-        # Skip if panel not yet initialized (lazy initialization)
-        if self._panel is None:
-            return
-        
-        # Load returns data via DataSource
         try:
             returns_data = self._data_source.load_field(
                 'returns',
@@ -188,31 +151,138 @@ class AlphaCanvas:
                 "Please add a 'returns' field definition."
             )
         
-        # Validate shape
-        expected_shape = (
-            len(self._panel.db.coords['time']),
-            len(self._panel.db.coords['asset'])
-        )
-        if returns_data.shape != expected_shape:
-            # Silently skip if shapes don't match (e.g., in tests with custom data)
-            # This allows tests to inject custom-sized returns if needed
-            return
+        return returns_data
+    
+    def _initialize_panel_from_universe(
+        self, 
+        universe: Union[Expression, xr.DataArray],
+        returns_data: xr.DataArray
+    ) -> None:
+        """Initialize panel from universe, reindex returns to match.
         
-        # Store returns
+        Args:
+            universe: Expression or DataArray defining panel shape
+            returns_data: Already-loaded returns data to reindex
+        """
+        # Evaluate universe if Expression
+        if isinstance(universe, Expression):
+            universe_data = self._evaluator.evaluate(universe)
+        else:
+            universe_data = universe
+        
+        # Extract coordinates from universe
+        time_index = universe_data.coords['time'].values
+        asset_index = universe_data.coords['asset'].values
+        
+        # Initialize panel with universe coordinates
+        self._panel = DataPanel(time_index, asset_index)
+        
+        # Reindex returns to match panel (LEFT JOIN)
+        returns_reindexed = self._reindex_to_panel(returns_data)
+        self._returns = returns_reindexed
+        self._panel.add_data('returns', returns_reindexed)
+        
+        # Re-sync evaluator
+        self._evaluator = EvaluateVisitor(self._panel.db, data_source=self._data_source)
+        self._evaluator._start_date = self.start_date
+        self._evaluator._end_date = self.end_date
+        self._evaluator._returns_data = self._returns
+    
+    def _initialize_panel_from_returns(self, returns_data: xr.DataArray) -> None:
+        """Initialize panel from returns coordinates (no reindex needed).
+        
+        Args:
+            returns_data: Already-loaded returns data
+        """
+        # Extract coordinates from returns
+        time_index = returns_data.coords['time'].values
+        asset_index = returns_data.coords['asset'].values
+        
+        # Initialize panel with returns coordinates
+        self._panel = DataPanel(time_index, asset_index)
+        
+        # Store returns as-is (no reindex needed - perfect match)
         self._returns = returns_data
-        
-        # Also add to panel for user access
         self._panel.add_data('returns', returns_data)
         
         # Re-sync evaluator
         self._evaluator = EvaluateVisitor(self._panel.db, data_source=self._data_source)
         self._evaluator._start_date = self.start_date
         self._evaluator._end_date = self.end_date
-        if self._universe_mask is not None:
-            self._evaluator._universe_mask = self._universe_mask
-        
-        # Pass returns to evaluator for backtest
         self._evaluator._returns_data = self._returns
+    
+    def _reindex_to_panel(self, data: xr.DataArray) -> xr.DataArray:
+        """Reindex incoming data to match panel coordinates (LEFT JOIN).
+        
+        Uses sparse reindex: only fills values for matching coordinates,
+        no forward-fill or nearest. Monthly data stays at month-end dates.
+        
+        Args:
+            data: DataArray with (time, asset) dimensions
+        
+        Returns:
+            DataArray reindexed to panel's coordinates
+        
+        Behavior:
+            - Panel coordinates: ['2024-01-02', '2024-01-03', ..., '2024-01-31']
+            - Incoming data: ['2024-01-31']  (monthly)
+            - Result: Values only at '2024-01-31', NaN elsewhere
+        
+        Example:
+            Panel: daily dates [2024-01-02, 2024-01-03, ..., 2024-01-31]
+            Data:  monthly date [2024-01-31]
+            Result: [NaN, NaN, ..., <value>]  (only last date has data)
+        """
+        # Get panel coordinates
+        panel_time = self._panel.db.coords['time']
+        panel_asset = self._panel.db.coords['asset']
+        
+        # Reindex to panel coordinates (sparse - no fill)
+        # This is LEFT JOIN: keep all panel coords, fill matching data
+        reindexed = data.reindex(
+            time=panel_time,
+            asset=panel_asset,
+            fill_value=float('nan')
+        )
+        
+        return reindexed
+    
+    def _set_initial_universe(self, universe: Union[Expression, xr.DataArray]) -> None:
+        """Set universe mask (called after panel initialization).
+        
+        Args:
+            universe: Expression or boolean DataArray
+        
+        Raises:
+            ValueError: If universe shape doesn't match panel
+            TypeError: If universe is not boolean dtype
+        """
+        # Evaluate if Expression (may already be evaluated in _initialize_panel_from_universe)
+        if isinstance(universe, Expression):
+            universe_data = self._evaluator.evaluate(universe)
+        else:
+            universe_data = universe
+        
+        # Validate shape (panel is now always initialized)
+        expected_shape = (
+            len(self._panel.db.coords['time']), 
+            len(self._panel.db.coords['asset'])
+        )
+        if universe_data.shape != expected_shape:
+            raise ValueError(
+                f"Universe mask shape {universe_data.shape} doesn't match "
+                f"panel shape {expected_shape}"
+            )
+        
+        # Validate dtype
+        if universe_data.dtype != bool:
+            raise TypeError(f"Universe must be boolean, got {universe_data.dtype}")
+        
+        # Store as immutable
+        self._universe_mask = universe_data
+        
+        # Pass to evaluator
+        self._evaluator._universe_mask = self._universe_mask
     
     @property
     def universe(self) -> Optional[xr.DataArray]:
@@ -332,73 +402,39 @@ class AlphaCanvas:
             self.rules[name] = data
             result = self._evaluator.evaluate(data)
             
-            # Lazy panel initialization from first data load
-            if self._panel is None:
-                time_index = result.coords['time'].values
-                asset_index = result.coords['asset'].values
-                self._panel = DataPanel(time_index, asset_index)
-                
-                # Validate universe shape after panel initialization
-                if self._universe_mask is not None:
-                    expected_shape = (len(time_index), len(asset_index))
-                    if self._universe_mask.shape != expected_shape:
-                        raise ValueError(
-                            f"Universe mask shape {self._universe_mask.shape} doesn't match "
-                            f"data shape {expected_shape}"
-                        )
+            # Panel is now ALWAYS initialized - reindex to match
+            result_reindexed = self._reindex_to_panel(result)
             
-            self._panel.add_data(name, result)
-            
-            # Auto-load returns after panel initialization (mandatory for backtesting)
-            if self._returns is None:
-                self._load_returns_data()
+            # Add reindexed data
+            self._panel.add_data(name, result_reindexed)
             
             # Re-sync evaluator with updated dataset
             self._evaluator = EvaluateVisitor(self._panel.db, data_source=self._data_source)
             self._evaluator._start_date = self.start_date
             self._evaluator._end_date = self.end_date
-            # Preserve universe mask reference
             if self._universe_mask is not None:
                 self._evaluator._universe_mask = self._universe_mask
-            # Pass returns to evaluator for backtest
             if self._returns is not None:
                 self._evaluator._returns_data = self._returns
         else:
             # Direct injection path (Open Toolkit pattern)
             
-            # Lazy panel initialization from first data load
-            if self._panel is None:
-                time_index = data.coords['time'].values
-                asset_index = data.coords['asset'].values
-                self._panel = DataPanel(time_index, asset_index)
-                
-                # Validate universe shape after panel initialization (before applying)
-                if self._universe_mask is not None:
-                    expected_shape = (len(time_index), len(asset_index))
-                    if self._universe_mask.shape != expected_shape:
-                        raise ValueError(
-                            f"Universe mask shape {self._universe_mask.shape} doesn't match "
-                            f"data shape {expected_shape}"
-                        )
+            # Panel is now ALWAYS initialized - reindex to match
+            data_reindexed = self._reindex_to_panel(data)
             
-            # Apply universe mask to injected data
+            # Apply universe mask to reindexed data
             if self._universe_mask is not None:
-                data = data.where(self._universe_mask, float('nan'))
+                data_reindexed = data_reindexed.where(self._universe_mask, float('nan'))
             
-            self._panel.add_data(name, data)
-
-            # Auto-load returns after panel initialization (mandatory for backtesting)
-            if self._returns is None:
-                self._load_returns_data()
-
+            # Add reindexed data
+            self._panel.add_data(name, data_reindexed)
+            
             # Re-sync evaluator with updated dataset
             self._evaluator = EvaluateVisitor(self._panel.db, data_source=self._data_source)
             self._evaluator._start_date = self.start_date
             self._evaluator._end_date = self.end_date
-            # Preserve universe mask reference
             if self._universe_mask is not None:
                 self._evaluator._universe_mask = self._universe_mask
-            # Pass returns to evaluator for backtest
             if self._returns is not None:
                 self._evaluator._returns_data = self._returns
     
