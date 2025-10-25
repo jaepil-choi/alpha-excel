@@ -389,11 +389,20 @@ def transform_price(input_path: Path, output_dir: Path, test_mode: bool = False)
         logger.info(f"  Added 'frequency' column (set to 'DAILY')")
     
     # 6. Preprocess data for alpha-database
-    logger.info(f"[6/7] Preprocessing data...")
+    logger.info(f"[6/8] Preprocessing data...")
     df_final = preprocess_price_data(df_final)
     
-    # 7. Add partition columns and save
-    logger.info(f"[7/7] Adding partition columns and saving...")
+    # 7. Drop rows without adj_close (non-existent securities on that date)
+    logger.info(f"[7/8] Filtering non-existent securities...")
+    rows_before = len(df_final)
+    df_final = df_final.dropna(subset=['adj_close'])
+    rows_after = len(df_final)
+    rows_dropped = rows_before - rows_after
+    logger.info(f"  ✓ Dropped {rows_dropped:,} rows without adj_close ({rows_dropped/rows_before*100:.1f}%)")
+    logger.info(f"  ✓ Remaining: {rows_after:,} rows (securities that actually existed)")
+    
+    # 8. Add partition columns and save
+    logger.info(f"[8/8] Adding partition columns and saving...")
     
     # Add year, month, day partition columns (hierarchical like groups)
     df_final['year'] = df_final['date'].dt.year

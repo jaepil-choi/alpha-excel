@@ -66,6 +66,13 @@ def load_price_data(input_dir: Path, test_mode: bool = False) -> pd.DataFrame:
     logger.info(f"    Date range: {df['date'].min()} to {df['date'].max()}")
     logger.info(f"    Unique symbols: {df['symbol'].nunique():,}")
     
+    # Filter out rows without adj_close (should already be filtered by price ETL, but defensive)
+    rows_before = len(df)
+    df = df.dropna(subset=['adj_close'])
+    rows_dropped = rows_before - len(df)
+    if rows_dropped > 0:
+        logger.info(f"  ⚠️  Dropped {rows_dropped:,} rows without adj_close")
+    
     return df
 
 
@@ -128,6 +135,13 @@ def save_returns(df: pd.DataFrame, output_dir: Path):
     
     # Select only needed columns
     df_output = df[['date', 'symbol', 'return', 'year', 'month', 'day']].copy()
+    
+    # Drop rows with NaN returns (first date per symbol + any calculation errors)
+    rows_before = len(df_output)
+    df_output = df_output.dropna(subset=['return'])
+    rows_dropped = rows_before - len(df_output)
+    logger.info(f"  Filtered out {rows_dropped:,} rows with NaN returns")
+    logger.info(f"  Remaining: {len(df_output):,} valid return observations")
     
     # Group by partition columns
     partition_groups = df_output.groupby(['year', 'month', 'day'])
