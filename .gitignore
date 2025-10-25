@@ -243,3 +243,5 @@ pip-selfcheck.json
 .cursorindexingignore
 
 .specstory/
+
+data/
