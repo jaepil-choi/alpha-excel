@@ -63,19 +63,20 @@ subindustry:
     WHERE DATE >= :start_date 
       AND DATE <= :end_date
 
-# Example: Daily returns
+# Daily returns (calculated from FnGuide adj_close)
+# Formula: (price_t - price_t-1) / price_t-1
 returns:
   db_type: parquet
-  table: PRICEVOLUME
+  table: FNGUIDE_RETURNS
   index_col: date
-  security_col: security_id
+  security_col: symbol
   value_col: return
   query: >
     SELECT 
       date, 
-      security_id, 
+      symbol, 
       return 
-    FROM read_parquet('data/fake/pricevolume.parquet')
+    FROM read_parquet('data/fnguide/returns/**/*.parquet', hive_partitioning=true)
     WHERE date >= :start_date 
       AND date <= :end_date
 
