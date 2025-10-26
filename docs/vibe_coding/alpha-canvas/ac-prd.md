@@ -215,6 +215,51 @@ mask_long = (rc.data['size'] == 'small') & (rc.data['surge_event'] == True)
 rc[mask_long] = 1.0  
 ```
 
+#### `add_data`의 필요성과 가치
+
+**핵심 질문:** Expression 내에서 직접 데이터를 참조할 수 있다면(e.g., `Field('market_cap')`), 왜 `add_data`로 중간 결과를 명시적으로 등록해야 하는가?
+
+**답변:** `add_data`는 단순한 데이터 로딩을 넘어, **워크플로우 효율성**과 **연구 생산성** 측면에서 핵심적인 역할을 합니다:
+
+1. **명시적 네이밍 및 재사용성 (Explicit Naming & Reusability) 🏷️**
+   * `rc.add_data('size', cs_quantile(...))`는 `'small'`, `'big'`와 같은 **중간 계산 결과(레이블)**를 `'size'`라는 **명확한 이름**으로 `rc.db`에 **저장**합니다.
+   * 이렇게 저장된 레이블은 **여러 곳에서 재사용**될 수 있습니다:
+     * 불리언 마스크 생성: `mask = (rc.data['size'] == 'small')`
+     * 종속 정렬(Dependent Sort): `cs_quantile(..., group_by='size')`
+     * 다른 분석 및 검증
+   * `add_data` 없이 `(size_expr == 'small')`만 사용하면, 이 중요한 중간 레이블 정보가 저장되지 않아 재사용이 불가능합니다.
+
+2. **효율성 - 재계산 방지 (Efficiency - Avoiding Recomputation) ⚡**
+   * `add_data`를 사용하면 `cs_quantile(...)` 같은 **비용이 큰 연산**이 **단 한 번만** 수행되어 `rc.db['size']`에 캐시됩니다.
+   * 이후 여러 마스크를 생성할 때:
+
+     ```python
+     mask_small = (rc.data['size'] == 'small')  # 빠른 비교 연산
+     mask_big = (rc.data['size'] == 'big')      # 빠른 비교 연산
+     ```
+
+   * `add_data` 없이 Expression을 직접 사용하면:
+
+     ```python
+     mask_small = (cs_quantile(...) == 'small')  # cs_quantile 재계산!
+     mask_big = (cs_quantile(...) == 'big')      # cs_quantile 또 재계산!
+     ```
+
+   * 특히 Fama-French 같이 동일한 팩터로 여러 포트폴리오를 구성하는 경우, `add_data`를 사용하면 **계산 비용이 O(n)에서 O(1)로 감소**합니다.
+
+3. **검증 및 디버깅 (Inspection & Debugging) ✅**
+   * `add_data`를 통해 중간 결과를 명명하면, 언제든 `rc.db['size']`를 출력하여 **의도한 대로 레이블링**되었는지 쉽게 확인할 수 있습니다:
+
+     ```python
+     print(rc.db['size'])  # 'small', 'big' 레이블 분포 확인
+     print((rc.db['size'] == 'small').sum())  # Small 그룹 종목 수 확인
+     ```
+
+   * Expression에 직접 비교 연산을 하면 이 중간 레이블링 결과를 확인하기 어렵습니다.
+   * 특히 복잡한 다단계 팩터 구성 시, **각 단계별 중간 결과를 검증**할 수 있어 디버깅이 획기적으로 쉬워집니다.
+
+**설계 원칙:** `add_data`는 "계산 비용이 큰 중간 결과"를 **명명하고, 캐싱하고, 재사용하고, 검증**하기 위한 **필수 패턴**입니다. 특히 Fama-French처럼 여러 단계의 정렬과 조합이 필요한 워크플로우에서 그 가치가 더욱 중요해집니다.
+
 ### F3: 중간 결과 캐싱 (Intermediate Result Caching)
 
 * **요구사항:** (핵심 문제 3 해결을 위한 기반) 사용자가 복잡한 수식의 **각 중간 연산 단계별** 데이터 상태를 검사하고, alpha-lab에서 단계별 PnL 분석을 수행할 수 있도록 중간 결과를 캐싱하고 접근 API를 제공해야 합니다. 단계는 **정수 인덱스(0부터 시작)**로 참조되며, Expression 트리를 **깊이 우선 탐색(depth-first traversal)**으로 순회하면서 부여됩니다.
