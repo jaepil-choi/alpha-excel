@@ -162,7 +162,7 @@ def main():
     pure_ds = rc.db
     print(f"  rc.db type: {type(pure_ds).__name__}")
     print(f"  Variables: {list(pure_ds.data_vars)}")
-    print(f"  Dimensions: {dict(pure_ds.dims)}")
+    print(f"  Dimensions: {dict(pure_ds.sizes)}")
     
     # Direct xarray operations
     print(f"\n  Direct xarray operations:")
