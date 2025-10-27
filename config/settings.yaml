@@ -1,0 +1,16 @@
+# Settings Configuration for alpha-excel
+# Global settings for data loading and transformations
+
+# Data Loading
+data_loading:
+  # Buffer period (in trading days) for data loading
+  # This buffer ensures we have sufficient historical data for transformations like:
+  # - Forward-fill (monthly -> daily needs prior month data)
+  # - Rolling windows (e.g., TsMean with window=252 needs 252 prior days)
+  # Default: 252 trading days (~1 year)
+  buffer_days: 252
+
+# Future settings can be added here
+# - universe_defaults:
+# - caching_behavior:
+# - etc.
