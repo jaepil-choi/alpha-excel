@@ -22,7 +22,7 @@ class Add(Expression):
     def accept(self, visitor):
         return visitor.visit_operator(self)
 
-    def compute(self, left_result: pd.DataFrame, right_result: pd.DataFrame) -> pd.DataFrame:
+    def compute(self, left_result: pd.DataFrame, right_result: pd.DataFrame = None, visitor=None) -> pd.DataFrame:
         """Element-wise addition - pandas native."""
         return left_result + right_result
 
@@ -36,7 +36,7 @@ class Subtract(Expression):
     def accept(self, visitor):
         return visitor.visit_operator(self)
 
-    def compute(self, left_result: pd.DataFrame, right_result: pd.DataFrame) -> pd.DataFrame:
+    def compute(self, left_result: pd.DataFrame, right_result: pd.DataFrame = None, visitor=None) -> pd.DataFrame:
         return left_result - right_result
 
 
@@ -49,7 +49,7 @@ class Multiply(Expression):
     def accept(self, visitor):
         return visitor.visit_operator(self)
 
-    def compute(self, left_result: pd.DataFrame, right_result: pd.DataFrame) -> pd.DataFrame:
+    def compute(self, left_result: pd.DataFrame, right_result: pd.DataFrame = None, visitor=None) -> pd.DataFrame:
         return left_result * right_result
 
 
@@ -70,7 +70,7 @@ class Divide(Expression):
     def accept(self, visitor):
         return visitor.visit_operator(self)
 
-    def compute(self, left_result: pd.DataFrame, right_result: pd.DataFrame) -> pd.DataFrame:
+    def compute(self, left_result: pd.DataFrame, right_result: pd.DataFrame = None, visitor=None) -> pd.DataFrame:
         """Element-wise division - pandas native.
 
         Note: Division by zero produces inf, division by NaN produces NaN.
@@ -86,7 +86,7 @@ class Negate(Expression):
     def accept(self, visitor):
         return visitor.visit_operator(self)
 
-    def compute(self, child_result: pd.DataFrame) -> pd.DataFrame:
+    def compute(self, child_result: pd.DataFrame, visitor=None) -> pd.DataFrame:
         return -child_result
 
 
@@ -119,7 +119,7 @@ class Pow(Expression):
     def accept(self, visitor):
         return visitor.visit_operator(self)
 
-    def compute(self, left_result: pd.DataFrame, right_result: pd.DataFrame) -> pd.DataFrame:
+    def compute(self, left_result: pd.DataFrame, right_result: pd.DataFrame = None, visitor=None) -> pd.DataFrame:
         """Element-wise power - pandas native.
 
         Args:
@@ -140,5 +140,5 @@ class Abs(Expression):
     def accept(self, visitor):
         return visitor.visit_operator(self)
 
-    def compute(self, child_result: pd.DataFrame) -> pd.DataFrame:
+    def compute(self, child_result: pd.DataFrame, visitor=None) -> pd.DataFrame:
         return child_result.abs()

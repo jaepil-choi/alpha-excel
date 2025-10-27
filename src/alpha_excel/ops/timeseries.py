@@ -159,7 +159,7 @@ class TsDelay(Expression):
     def accept(self, visitor):
         return visitor.visit_operator(self)
 
-    def compute(self, child_result: pd.DataFrame) -> pd.DataFrame:
+    def compute(self, child_result: pd.DataFrame, visitor=None) -> pd.DataFrame:
         return child_result.shift(self.window)
 
 
@@ -180,7 +180,7 @@ class TsDelta(Expression):
     def accept(self, visitor):
         return visitor.visit_operator(self)
 
-    def compute(self, child_result: pd.DataFrame) -> pd.DataFrame:
+    def compute(self, child_result: pd.DataFrame, visitor=None) -> pd.DataFrame:
         return child_result - child_result.shift(self.window)
 
 

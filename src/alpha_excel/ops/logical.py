@@ -22,7 +22,7 @@ class Equals(Expression):
     def accept(self, visitor):
         return visitor.visit_operator(self)
 
-    def compute(self, left_result: pd.DataFrame) -> pd.DataFrame:
+    def compute(self, left_result: pd.DataFrame, visitor=None) -> pd.DataFrame:
         """Equality comparison - pandas native."""
         # right is literal (not Expression)
         return left_result == self.right
@@ -37,7 +37,7 @@ class NotEquals(Expression):
     def accept(self, visitor):
         return visitor.visit_operator(self)
 
-    def compute(self, left_result: pd.DataFrame) -> pd.DataFrame:
+    def compute(self, left_result: pd.DataFrame, visitor=None) -> pd.DataFrame:
         return left_result != self.right
 
 
@@ -50,7 +50,7 @@ class GreaterThan(Expression):
     def accept(self, visitor):
         return visitor.visit_operator(self)
 
-    def compute(self, left_result: pd.DataFrame) -> pd.DataFrame:
+    def compute(self, left_result: pd.DataFrame, visitor=None) -> pd.DataFrame:
         return left_result > self.right
 
 
@@ -63,7 +63,7 @@ class LessThan(Expression):
     def accept(self, visitor):
         return visitor.visit_operator(self)
 
-    def compute(self, left_result: pd.DataFrame) -> pd.DataFrame:
+    def compute(self, left_result: pd.DataFrame, visitor=None) -> pd.DataFrame:
         return left_result < self.right
 
 
@@ -76,7 +76,7 @@ class GreaterOrEqual(Expression):
     def accept(self, visitor):
         return visitor.visit_operator(self)
 
-    def compute(self, left_result: pd.DataFrame) -> pd.DataFrame:
+    def compute(self, left_result: pd.DataFrame, visitor=None) -> pd.DataFrame:
         return left_result >= self.right
 
 
@@ -89,7 +89,7 @@ class LessOrEqual(Expression):
     def accept(self, visitor):
         return visitor.visit_operator(self)
 
-    def compute(self, left_result: pd.DataFrame) -> pd.DataFrame:
+    def compute(self, left_result: pd.DataFrame, visitor=None) -> pd.DataFrame:
         return left_result <= self.right
 
 
@@ -102,7 +102,7 @@ class And(Expression):
     def accept(self, visitor):
         return visitor.visit_operator(self)
 
-    def compute(self, left_result: pd.DataFrame, right_result: pd.DataFrame) -> pd.DataFrame:
+    def compute(self, left_result: pd.DataFrame, right_result: pd.DataFrame = None, visitor=None) -> pd.DataFrame:
         return left_result & right_result
 
 
@@ -115,7 +115,7 @@ class Or(Expression):
     def accept(self, visitor):
         return visitor.visit_operator(self)
 
-    def compute(self, left_result: pd.DataFrame, right_result: pd.DataFrame) -> pd.DataFrame:
+    def compute(self, left_result: pd.DataFrame, right_result: pd.DataFrame = None, visitor=None) -> pd.DataFrame:
         return left_result | right_result
 
 
@@ -127,7 +127,7 @@ class Not(Expression):
     def accept(self, visitor):
         return visitor.visit_operator(self)
 
-    def compute(self, child_result: pd.DataFrame) -> pd.DataFrame:
+    def compute(self, child_result: pd.DataFrame, visitor=None) -> pd.DataFrame:
         # Ensure boolean dtype (handles object dtype from NaN values)
         return ~child_result.astype(bool)
 
@@ -168,6 +168,6 @@ class IsNan(Expression):
     def accept(self, visitor):
         return visitor.visit_operator(self)
 
-    def compute(self, child_result: pd.DataFrame) -> pd.DataFrame:
+    def compute(self, child_result: pd.DataFrame, visitor=None) -> pd.DataFrame:
         """Check for NaN values - pandas native."""
         return child_result.isna()
