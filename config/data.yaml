@@ -60,6 +60,140 @@ fnguide_trading_value:
     WHERE date >= :start_date
       AND date <= :end_date
 
+# FnGuide: Listed shares - common stock (상장주식수 보통주)
+fnguide_listed_shares_common:
+  db_type: parquet
+  data_type: numeric
+  forward_fill: false
+  table: FNGUIDE_PRICE
+  index_col: date
+  security_col: symbol
+  value_col: listed_shares_common
+  query: >
+    SELECT
+      date,
+      symbol,
+      listed_shares_common
+    FROM read_parquet('data/fnguide/price/**/*.parquet', hive_partitioning=true)
+    WHERE date >= :start_date
+      AND date <= :end_date
+
+# FnGuide: Float shares (유동주식수)
+fnguide_float_shares:
+  db_type: parquet
+  data_type: numeric
+  forward_fill: false
+  table: FNGUIDE_PRICE
+  index_col: date
+  security_col: symbol
+  value_col: float_shares
+  query: >
+    SELECT
+      date,
+      symbol,
+      float_shares
+    FROM read_parquet('data/fnguide/price/**/*.parquet', hive_partitioning=true)
+    WHERE date >= :start_date
+      AND date <= :end_date
+
+# FnGuide: Float ratio percentage (유동주식비율)
+fnguide_float_ratio_pct:
+  db_type: parquet
+  data_type: numeric
+  forward_fill: false
+  table: FNGUIDE_PRICE
+  index_col: date
+  security_col: symbol
+  value_col: float_ratio_pct
+  query: >
+    SELECT
+      date,
+      symbol,
+      float_ratio_pct
+    FROM read_parquet('data/fnguide/price/**/*.parquet', hive_partitioning=true)
+    WHERE date >= :start_date
+      AND date <= :end_date
+
+# FnGuide: Market cap in won (시가총액)
+# Note: Converted from millions to won by ETL (multiply by 1,000,000)
+fnguide_market_cap:
+  db_type: parquet
+  data_type: numeric
+  forward_fill: false
+  table: FNGUIDE_PRICE
+  index_col: date
+  security_col: symbol
+  value_col: market_cap
+  query: >
+    SELECT
+      date,
+      symbol,
+      market_cap
+    FROM read_parquet('data/fnguide/price/**/*.parquet', hive_partitioning=true)
+    WHERE date >= :start_date
+      AND date <= :end_date
+
+# FnGuide: Trading suspended status (거래정지 여부)
+# Boolean: True = trading suspended, False = normal trading
+fnguide_is_trading_suspended:
+  db_type: parquet
+  data_type: boolean
+  forward_fill: false
+  table: FNGUIDE_PRICE
+  index_col: date
+  security_col: symbol
+  value_col: is_trading_suspended
+  query: >
+    SELECT
+      date,
+      symbol,
+      is_trading_suspended
+    FROM read_parquet('data/fnguide/price/**/*.parquet', hive_partitioning=true)
+    WHERE date >= :start_date
+      AND date <= :end_date
+
+# FnGuide: Management issue status (관리종목 여부)
+# Boolean: True = has issues, False = general (normal)
+fnguide_is_issue:
+  db_type: parquet
+  data_type: boolean
+  forward_fill: false
+  table: FNGUIDE_PRICE
+  index_col: date
+  security_col: symbol
+  value_col: is_issue
+  query: >
+    SELECT
+      date,
+      symbol,
+      is_issue
+    FROM read_parquet('data/fnguide/price/**/*.parquet', hive_partitioning=true)
+    WHERE date >= :start_date
+      AND date <= :end_date
+
+# ============================================================================
+# FnGuide Groups (Monthly Data - All Forward-Filled)
+# ============================================================================
+
+# FnGuide: Sector classification (섹터)
+# Monthly data - forward filled to daily frequency
+fnguide_sector:
+  db_type: parquet
+  data_type: group
+  forward_fill: true
+  table: FNGUIDE_GROUPS
+  index_col: date
+  security_col: symbol
+  value_col: fn_sector
+  query: >
+    SELECT
+      date,
+      symbol,
+      fn_sector
+    FROM read_parquet('data/fnguide/groups/**/*.parquet', hive_partitioning=true)
+    WHERE date >= :start_date
+      AND date <= :end_date
+
 # FnGuide: Industry group classification (산업 그룹)
 # Monthly data - forward filled to daily frequency
 fnguide_industry_group:
@@ -75,6 +209,82 @@ fnguide_industry_group:
       date,
       symbol,
       fn_industry_group
+    FROM read_parquet('data/fnguide/groups/**/*.parquet', hive_partitioning=true)
+    WHERE date >= :start_date
+      AND date <= :end_date
+
+# FnGuide: Industry classification (산업)
+# Monthly data - forward filled to daily frequency
+fnguide_industry:
+  db_type: parquet
+  data_type: group
+  forward_fill: true
+  table: FNGUIDE_GROUPS
+  index_col: date
+  security_col: symbol
+  value_col: fn_industry
+  query: >
+    SELECT
+      date,
+      symbol,
+      fn_industry
+    FROM read_parquet('data/fnguide/groups/**/*.parquet', hive_partitioning=true)
+    WHERE date >= :start_date
+      AND date <= :end_date
+
+# FnGuide: Industry group 27 classification (산업 그룹 27)
+# Monthly data - forward filled to daily frequency
+fnguide_industry_group_27:
+  db_type: parquet
+  data_type: group
+  forward_fill: true
+  table: FNGUIDE_GROUPS
+  index_col: date
+  security_col: symbol
+  value_col: fn_industry_group_27
+  query: >
+    SELECT
+      date,
+      symbol,
+      fn_industry_group_27
+    FROM read_parquet('data/fnguide/groups/**/*.parquet', hive_partitioning=true)
+    WHERE date >= :start_date
+      AND date <= :end_date
+
+# KRX: Exchange sector (거래소 업종)
+# Monthly data - forward filled to daily frequency
+krx_sector:
+  db_type: parquet
+  data_type: group
+  forward_fill: true
+  table: FNGUIDE_GROUPS
+  index_col: date
+  security_col: symbol
+  value_col: krx_sector
+  query: >
+    SELECT
+      date,
+      symbol,
+      krx_sector
+    FROM read_parquet('data/fnguide/groups/**/*.parquet', hive_partitioning=true)
+    WHERE date >= :start_date
+      AND date <= :end_date
+
+# KRX: Exchange sector detail (거래소 업종 세부분류)
+# Monthly data - forward filled to daily frequency
+krx_sector_detail:
+  db_type: parquet
+  data_type: group
+  forward_fill: true
+  table: FNGUIDE_GROUPS
+  index_col: date
+  security_col: symbol
+  value_col: krx_sector_detail
+  query: >
+    SELECT
+      date,
+      symbol,
+      krx_sector_detail
     FROM read_parquet('data/fnguide/groups/**/*.parquet', hive_partitioning=true)
     WHERE date >= :start_date
       AND date <= :end_date
