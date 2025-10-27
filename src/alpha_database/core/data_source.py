@@ -4,7 +4,7 @@ DataSource facade for alpha-database.
 This module provides the main user-facing API for loading data from various sources.
 """
 
-import xarray as xr
+import pandas as pd
 from typing import Dict
 from .config import ConfigLoader
 from .data_loader import DataLoader
@@ -91,32 +91,32 @@ class DataSource:
         field_name: str,
         start_date: str,
         end_date: str
-    ) -> xr.DataArray:
+    ) -> 'pd.DataFrame':
         """Load a data field with specified date range.
-        
+
         This is the main method for loading data. It:
         1. Looks up field configuration
         2. Selects appropriate reader based on db_type
         3. Executes query with date parameters
-        4. Transforms result to xarray.DataArray
-        
+        4. Transforms result to pandas DataFrame
+
         Args:
             field_name: Name of field to load (e.g., 'adj_close', 'volume')
             start_date: Start date (YYYY-MM-DD format)
             end_date: End date (YYYY-MM-DD format)
-        
+
         Returns:
-            xarray.DataArray with dims=['time', 'asset'] and shape (T, N)
-        
+            pandas DataFrame with index=time, columns=asset, shape (T, N)
+
         Raises:
             KeyError: If field_name not found in configuration
             ValueError: If db_type not supported (no registered reader)
-        
+
         Example:
             >>> ds = DataSource()
             >>> adj_close = ds.load_field('adj_close', '2024-01-01', '2024-12-31')
             >>> print(adj_close.shape)  # (252, 100) - 252 trading days, 100 assets
-            
+
             >>> # Load multiple fields with same instance
             >>> volume = ds.load_field('volume', '2024-01-01', '2024-12-31')
             >>> market_cap = ds.load_field('market_cap', '2024-01-01', '2024-12-31')
@@ -139,23 +139,47 @@ class DataSource:
             'end_date': end_date
         }
         df_long = reader.read(field_config['query'], params)
-        
-        # Step 4: Pivot to xarray
-        data_array = self._data_loader.pivot_to_xarray(
-            df=df_long,
-            time_col=field_config['index_col'],
-            asset_col=field_config['security_col'],
-            value_col=field_config['value_col']
+
+        # Step 4: Pivot to wide format (pandas DataFrame)
+        df_wide = df_long.pivot(
+            index=field_config['index_col'],
+            columns=field_config['security_col'],
+            values=field_config['value_col']
         )
-        
-        return data_array
+
+        # Ensure index is DatetimeIndex
+        if not isinstance(df_wide.index, pd.DatetimeIndex):
+            df_wide.index = pd.to_datetime(df_wide.index)
+
+        # Return data as-is (alpha-excel will handle forward-fill if needed)
+        return df_wide
     
+    def get_field_config(self, field_name: str) -> Dict:
+        """Get configuration for a specific data field.
+
+        Args:
+            field_name: Name of the field to retrieve (e.g., 'adj_close')
+
+        Returns:
+            Dictionary containing field configuration (including data_type, forward_fill, etc.)
+
+        Raises:
+            KeyError: If field_name is not found in configuration
+
+        Example:
+            >>> ds = DataSource()
+            >>> config = ds.get_field_config('fnguide_industry_group')
+            >>> print(config.get('data_type'))  # 'group'
+            >>> print(config.get('forward_fill'))  # True
+        """
+        return self._config.get_field(field_name)
+
     def list_fields(self):
         """List all available field names.
-        
+
         Returns:
             List of field names configured in data.yaml
-        
+
         Example:
             >>> ds = DataSource()
             >>> fields = ds.list_fields()
