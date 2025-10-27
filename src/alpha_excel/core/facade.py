@@ -153,14 +153,18 @@ class AlphaExcel:
 
         # Initialize evaluator with config loader
         self._evaluator = EvaluateVisitor(self.ctx, data_source=data_source, config_loader=self._config)
-        self._evaluator._start_date = start_date
-        self._evaluator._end_date = end_date
-        self._evaluator._buffer_start_date = self._buffer_start_date  # Pass buffer to visitor
-        self._evaluator._returns_data = returns_data
 
         # Store universe mask
         self._universe_mask = universe_mask
-        self._evaluator._universe_mask = self._universe_mask
+
+        # Initialize specialized components in evaluator
+        self._evaluator.initialize_components(
+            universe_mask_df=universe_mask,
+            returns_data=returns_data,
+            start_date=start_date,
+            end_date=end_date,
+            buffer_start_date=self._buffer_start_date
+        )
 
     def _load_returns(self) -> pd.DataFrame:
         """Load returns data from DataSource.
