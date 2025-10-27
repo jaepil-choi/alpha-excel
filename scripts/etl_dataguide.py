@@ -42,8 +42,8 @@ GROUPS_COLUMN_MAP = {
     'FnGuide Industry Group': 'fn_industry_group',
     'FnGuide Industry': 'fn_industry',
     'FnGuide Industry Group 27': 'fn_industry_group_27',
-    '거래소 업종': 'exchange_sector', # TODO: krx_sector
-    '거래소 업종 (세부분류)': 'exchange_sector_detail' # TODO: krx_sector_detail
+    '거래소 업종': 'krx_sector',
+    '거래소 업종 (세부분류)': 'krx_sector_detail'
 }
 
 PRICE_COLUMN_MAP = {
