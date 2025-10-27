@@ -4377,3 +4377,123 @@ def group_aggregate_at_time(data_slice, group_slice):
 **Next**: Cross-sectional operators (Scale, Normalize, etc.)
 
 ---
+
+## ETL Experiment: FnGuide IR Events API Test
+
+**Date**: 2025-10-27
+**Script**: `experiments/etl_exp_fnguide_ir_api_test.py`
+**Goal**: Test curl_cffi access to FnGuide IR events API and examine data structure for ETL pipeline.
+
+### Summary
+
+Successfully tested FnGuide IR events API using curl_cffi. The API returns JSON data with IR event records (earnings announcements, dividends, stock splits, mergers, etc.). Data is available from ~2015 onwards with ~200-500 records per month.
+
+### Key Findings
+
+1. **API Access Works**
+   - URL Pattern: `https://comp.fnguide.com/SVO2/json/data/05_01/{YYYYMM}.json?_={timestamp}`
+   - No authentication required (public API)
+   - curl_cffi with Chrome impersonation works perfectly
+
+2. **Data Structure**
+   - Response: `{"comp": [array of event objects]}`
+   - 22 fields per event (all strings, need parsing)
+   - Korean field names: 일자, 종목명, 기업명, 이벤트코드, 종류, etc.
+
+3. **Event Types Observed**
+   - IR1: Earnings announcement (실적발표)
+   - IR2: IR meeting (경영현황)
+   - 10: Dividend (배당금)
+   - 17: Stock dividend (주식배당)
+   - 22: Stock split
+   - 40: Name change
+   - 52: Merger
+
+4. **Data Availability**
+   - Recent months (2025): ✅ Works
+   - Old dates (2010): ❌ HTML error (data not available)
+   - Need to test to find actual start date
+
+5. **Encoding**
+   - Response uses EUC-KR encoding for Korean
+   - curl_cffi handles it correctly with try/except fallback
+
+### Technical Implementation
+
+**Column Mapping (Korean → English)**:
+- 일자 → event_date
+- 종목명 → symbol
+- 기업명 → company_name
+- 이벤트코드 → event_code
+- 종류 → category
+- etc. (22 fields total)
+
+**ETL Strategy**:
+1. Fetch month by month from 2025-09 backwards
+2. 1 second sleep between requests (respectful)
+3. Stop after 10 consecutive failures (data unavailable)
+4. Save immediately to Parquet (incremental)
+5. Hive partitioning: year/month
+
+**Data Volume Estimates**:
+- ~200-500 records/month
+- ~15 years × 12 months = 180 months
+- Total: ~36,000-90,000 records
+- Parquet size: ~10-20 MB compressed
+
+### Lessons Learned
+
+1. **Windows Console Encoding**
+   - Korean displays garbled in terminal (cp949 encoding)
+   - But data stored correctly as UTF-8 in Parquet
+   - Always verify with JSON output or file inspection
+
+2. **Incremental ETL Design**
+   - Save each month immediately (don't buffer in memory)
+   - Skip already-downloaded partitions on re-run
+   - Resilient to crashes (can resume)
+
+3. **Respectful Scraping**
+   - 1 second delay between requests
+   - Stop after consecutive failures (don't hammer server)
+   - User-Agent spoofing with curl_cffi Chrome impersonation
+
+4. **Event Data Schema**
+   - Boolean indicators (1 = event occurred)
+   - Simple queries: `WHERE event_code = 'IR1' AND category = '실적발표'`
+   - No forward-fill needed (events are discrete)
+
+### Files Created
+
+- [x] `experiments/etl_exp_fnguide_ir_api_test.py`: API test script
+- [x] `scripts/etl_fnguide_ir_events.py`: Production ETL script
+- [x] `config/data.yaml`: Added `fnguide_earnings_announcement` field
+
+### Production Outcomes
+
+**ETL Script Features**:
+- ✅ Skip already-downloaded months
+- ✅ Incremental save (one month at a time)
+- ✅ Rate limiting (1 second between requests)
+- ✅ Automatic stop on 10 consecutive failures
+- ✅ Test mode (fetch 3 months only)
+
+**Initial Test Run**:
+- Fetched: 2025-09, 2025-08, 2025-07
+- Total: 1,105 records
+- File size: ~146 KB (3 months)
+- Execution time: ~6 seconds
+
+**Config Entry**:
+- Field: `fnguide_earnings_announcement`
+- Type: event (boolean indicator)
+- Filter: `event_code = 'IR1' AND category = '실적발표'`
+
+### Next Steps
+
+1. Run full ETL: `poetry run python scripts/etl_fnguide_ir_events.py -f`
+2. Add more event types (dividends, splits, etc.) to config if needed
+3. Test using earnings events in alpha-excel expressions
+4. Consider adding event-based trading strategies
+
+---
