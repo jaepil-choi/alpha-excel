@@ -574,11 +574,16 @@ class TsAny(Expression):
         return visitor.visit_operator(self)
 
     def compute(self, child_result: pd.DataFrame, visitor=None) -> pd.DataFrame:
-        """Core computation logic for rolling any."""
+        """Core computation logic for rolling any.
+
+        Note: min_periods=1 is hardcoded because "any" semantically means
+        "1 or more". We want to detect if ANY value is True, even with
+        partial window data.
+        """
         import numpy as np
 
-        ratio = self.get_config(visitor, 'min_periods_ratio', 0.5)
-        min_periods = max(1, int(self.window * ratio))
+        # Hardcoded min_periods=1 (semantic requirement for "any")
+        min_periods = 1
 
         # Sum counts True values (True=1, False=0)
         count_true = child_result.astype(float).rolling(

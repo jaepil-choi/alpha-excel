@@ -54,6 +54,9 @@ timeseries:
   TsRank:
     min_periods_ratio: 0.5  # Rank needs reasonable sample size
 
+  # Note: TsAny NOT in config - hardcoded min_periods=1 (semantic requirement)
+  # "Any" means "1 or more", so should work with even a single observation
+
 # ============================================================================
 # Future: Other Operator Categories
 # ============================================================================
