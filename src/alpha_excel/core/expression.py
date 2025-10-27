@@ -358,26 +358,30 @@ class Expression(ABC):
 @dataclass(eq=False)  # Disable dataclass __eq__ to use Expression operators
 class Field(Expression):
     """Leaf node: Reference to a data field.
-    
+
     Field represents a reference to data that exists in the dataset or
     should be loaded from the database (via config).
-    
+
     Attributes:
         name: Name of the field to retrieve (e.g., 'returns', 'market_cap')
+        data_type: Type of data (e.g., 'numeric', 'group') - populated when loaded
+                   Used for validation (e.g., group operators should only accept 'group' fields)
 
     Example:
         >>> field = Field('returns')
         >>> result = visitor.evaluate(field)
         >>> # result is pandas DataFrame with (T, N) returns data
+        >>> # field.data_type is now populated (e.g., 'numeric')
     """
     name: str
-    
+    data_type: str = None  # Populated when field is loaded via visitor
+
     def accept(self, visitor):
         """Accept visitor and delegate to visit_field().
-        
+
         Args:
             visitor: Visitor instance with visit_field() method
-        
+
         Returns:
             Result from visitor.visit_field(self)
         """

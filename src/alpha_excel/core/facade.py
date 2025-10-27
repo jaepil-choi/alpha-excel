@@ -11,6 +11,7 @@ from typing import Optional, Union, TYPE_CHECKING
 from alpha_excel.core.data_model import DataContext
 from alpha_excel.core.expression import Expression
 from alpha_excel.core.visitor import EvaluateVisitor
+from alpha_excel.core.config import ConfigLoader
 
 if TYPE_CHECKING:
     from alpha_excel.portfolio.base import WeightScaler
@@ -100,7 +101,18 @@ class AlphaExcel:
         self.start_date = start_date
         self.end_date = end_date
 
-        # Load returns FIRST (mandatory)
+        # Load config for field metadata and settings
+        self._config = ConfigLoader('config')
+
+        # Calculate buffer start date for data loading
+        # This ensures we have sufficient historical data for transformations
+        import datetime
+        buffer_days = self._config.get_buffer_days()
+        start_dt = datetime.datetime.strptime(start_date, '%Y-%m-%d')
+        buffer_start_dt = start_dt - datetime.timedelta(days=int(buffer_days * 1.4))  # ~1.4x for calendar days
+        self._buffer_start_date = buffer_start_dt.strftime('%Y-%m-%d')
+
+        # Load returns FIRST (mandatory) with buffer
         returns_data = self._load_returns()
 
         # Handle universe parameter
@@ -139,10 +151,11 @@ class AlphaExcel:
         # Store returns
         self.ctx['returns'] = returns_data
 
-        # Initialize evaluator
-        self._evaluator = EvaluateVisitor(self.ctx, data_source=data_source)
+        # Initialize evaluator with config
+        self._evaluator = EvaluateVisitor(self.ctx, data_source=data_source, config=self._config)
         self._evaluator._start_date = start_date
         self._evaluator._end_date = end_date
+        self._evaluator._buffer_start_date = self._buffer_start_date  # Pass buffer to visitor
         self._evaluator._returns_data = returns_data
 
         # Store universe mask
@@ -161,17 +174,15 @@ class AlphaExcel:
             ValueError: If 'returns' field not found in config
         """
         try:
-            # Load from DataSource (may return xarray or pandas)
-            loaded_data = self._data_source.load_field(
+            # Load from DataSource with buffer (returns pandas DataFrame)
+            returns_data = self._data_source.load_field(
                 'returns',
-                start_date=self.start_date,
+                start_date=self._buffer_start_date,
                 end_date=self.end_date if self.end_date else self.start_date
             )
-            # Convert to pandas if necessary (alpha_excel uses pandas only)
-            if hasattr(loaded_data, 'to_pandas'):
-                returns_data = loaded_data.to_pandas()
-            else:
-                returns_data = loaded_data
+
+            # Trim to requested date range (keep only start_date onwards)
+            returns_data = returns_data.loc[self.start_date:]
         except KeyError:
             raise ValueError(
                 "Return data is mandatory for backtesting. "

@@ -36,20 +36,23 @@ class EvaluateVisitor:
         >>> result_df = visitor.evaluate(field)
     """
 
-    def __init__(self, ctx: DataContext, data_source=None):
+    def __init__(self, ctx: DataContext, data_source=None, config=None):
         """Initialize EvaluateVisitor with DataContext.
 
         Args:
             ctx: DataContext containing cached data variables
             data_source: Optional DataSource for loading fields
+            config: Optional ConfigLoader for field metadata (forward_fill, data_type)
         """
         self._ctx = ctx
         self._data_source = data_source
+        self._config = config
         self._universe_mask: Optional[pd.DataFrame] = None  # Set by AlphaExcel (always present)
 
         # Date range (set by AlphaExcel after construction)
         self._start_date: Optional[str] = None
         self._end_date: Optional[str] = None
+        self._buffer_start_date: Optional[str] = None  # Buffer start date from facade
 
         # Triple-cache architecture for PnL tracing
         self._signal_cache: Dict[int, Tuple[str, pd.DataFrame]] = {}
@@ -166,17 +169,41 @@ class EvaluateVisitor:
                 raise RuntimeError(
                     f"Field '{node.name}' not found in context and no DataSource available."
                 )
-            loaded_data = self._data_source.load_field(
+            # Get field metadata from config
+            field_config = None
+            if self._config is not None:
+                try:
+                    field_config = self._config.get_field(node.name)
+                except KeyError:
+                    # Field not in config - that's okay
+                    field_config = None
+
+            # Populate data_type from field config
+            if node.data_type is None and field_config is not None:
+                node.data_type = field_config.get('data_type', None)
+
+            # Load from DataSource with buffer (returns pandas DataFrame)
+            # Buffer is calculated once in AlphaExcel facade
+            result = self._data_source.load_field(
                 node.name,
-                start_date=self._start_date,
+                start_date=self._buffer_start_date,
                 end_date=self._end_date
             )
 
-            # Convert xarray to pandas if necessary
-            if hasattr(loaded_data, 'to_pandas'):
-                result = loaded_data.to_pandas()
-            else:
-                result = loaded_data
+            # Apply forward-fill transformation if configured
+            # This handles low-frequency data (monthly, quarterly) → daily frequency
+            if field_config is not None and field_config.get('forward_fill', False):
+                # Ensure index is DatetimeIndex
+                if not isinstance(result.index, pd.DatetimeIndex):
+                    result.index = pd.to_datetime(result.index)
+
+                # Reindex to daily frequency (business days) with forward-fill
+                expected_dates = self._universe_mask.index
+                result = result.reindex(expected_dates, method='ffill')
+
+            # Trim to requested date range (remove buffer period)
+            if result.index[0] < pd.Timestamp(self._start_date):
+                result = result.loc[self._start_date:]
 
             # REINDEX to match universe shape BEFORE storing in context
             # This handles fields with different shapes (e.g., static data, different universe)
