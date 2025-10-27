@@ -4,19 +4,20 @@
 
 ## 3.0. 구현 상태 요약 (Implementation Status Summary)
 
-**최종 업데이트**: 2025-10-27
+**최종 업데이트**: 2025-10-28
 
 ### ✅ **핵심 기능 구현 완료**
 
 | Feature | Status | Location | Description |
 |---------|--------|----------|-------------|
-| **F1: Auto Data Loading** | ✅ DONE | `core/visitor.py` | Field auto-loading from DataSource |
+| **F1: Auto Data Loading** | ✅ DONE | `core/field_loader.py` | Field auto-loading via FieldLoader |
 | **F2: Expression-Only API** | ✅ DONE | `core/facade.py` | Direct evaluate() without add_data() |
-| **F3: Triple-Cache** | ✅ DONE | `core/visitor.py` | Signal, weight, port_return caching |
+| **F3: Triple-Cache** | ✅ DONE | `core/step_tracker.py` | Signal, weight, port_return caching |
 | **F4: Portfolio (Weights)** | ✅ DONE | `portfolio/` | Strategy pattern weight scalers |
-| **F5: Backtesting** | ✅ DONE | `core/visitor.py`, `core/facade.py` | Shift-mask workflow, position returns |
+| **F5: Backtesting** | ✅ DONE | `core/backtest_engine.py` | Shift-mask workflow, position returns |
 | **F6: Serialization** | ✅ DONE | `core/serialization.py` | Expression to/from dict, dependencies |
-| **Universe Masking** | ✅ DONE | `core/facade.py`, `core/visitor.py` | Double masking (no None checks) |
+| **Universe Masking** | ✅ DONE | `core/universe_mask.py` | Centralized masking (double masking) |
+| **SRP Refactoring** | ✅ DONE | `core/visitor.py` + 4 components | Visitor focuses on tree traversal only |
 | **Arithmetic Operators** | ✅ DONE | `ops/arithmetic.py` | Add, Subtract, Multiply, Divide, Negate, Abs |
 | **Logical Operators** | ✅ DONE | `ops/logical.py` | Comparisons, And, Or, Not, IsNan |
 | **Time-Series Operators** | ✅ CORE DONE | `ops/timeseries.py` | Rolling, shift, stats (15 ops implemented) |
@@ -51,14 +52,18 @@ alpha-canvas/
 │       ├── core/
 │       │   ├── facade.py       # AlphaExcel (rc) 클래스 구현
 │       │   ├── expression.py   # Expression 기본 인터페이스
-│       │   ├── visitor.py      # EvaluateVisitor (auto-loading, no None checks)
+│       │   ├── visitor.py      # EvaluateVisitor (SRP 적용, 트리 순회 전담)
 │       │   ├── data_model.py   # DataContext (dict-like pandas storage)
-│       │   └── serialization.py # Serialization/Deserialization visitors
+│       │   ├── serialization.py # Serialization/Deserialization visitors
+│       │   ├── universe_mask.py # [NEW] UniverseMask (마스킹 로직)
+│       │   ├── step_tracker.py  # [NEW] StepTracker (triple-cache 관리)
+│       │   ├── field_loader.py  # [NEW] FieldLoader (데이터 로딩/변환)
+│       │   └── backtest_engine.py # [NEW] BacktestEngine (백테스트 계산)
 │       ├── ops/                # 연산자
 │       │   ├── __init__.py
 │       │   ├── timeseries.py   # TsMean, TsStd, etc.
 │       │   ├── crosssection.py # Rank, Demean, etc.
-│       │   ├── group.py        # GroupNeutralize, etc. (TODO)
+│       │   ├── group.py        # GroupNeutralize, GroupRank, etc.
 │       │   ├── arithmetic.py   # Add, Subtract, Multiply, Divide, etc.
 │       │   ├── logical.py      # And, Or, Not, Equals, etc.
 │       │   └── constants.py    # Constant value operator
@@ -76,9 +81,14 @@ alpha-canvas/
             └── ae-implementation.md   # 이 문서
 ```
 
-**핵심 설계 원칙:**
+**핵심 설계 원칙 (SRP 적용):**
 * `core/expression.py`, `ops/*`: Expression 인터페이스와 연산자 정의
-* `core/facade.py`, `core/visitor.py`: pandas 기반 자동 로딩 구현
+* `core/facade.py`: AlphaExcel facade (단일 진입점)
+* `core/visitor.py`: Expression 트리 순회 전담 (SRP)
+* **`core/universe_mask.py`**: Universe 마스킹 로직 중앙화
+* **`core/step_tracker.py`**: Triple-cache 관리 전담
+* **`core/field_loader.py`**: 데이터 로딩 및 변환 전담
+* **`core/backtest_engine.py`**: 백테스트 계산 전담
 * `core/serialization.py`: Expression 직렬화/역직렬화
 * `portfolio/*`: Strategy Pattern 기반 가중치 스케일링
 
@@ -247,11 +257,18 @@ class AlphaExcel:
 
         # Initialize evaluator
         self._evaluator = EvaluateVisitor(self.ctx, data_source=data_source)
-        self._evaluator._start_date = start_date
-        self._evaluator._end_date = end_date
-        self._evaluator._returns_data = returns_data
+
+        # Store universe mask
         self._universe_mask = universe_mask
-        self._evaluator._universe_mask = self._universe_mask
+
+        # Initialize specialized components in evaluator (SRP 적용)
+        self._evaluator.initialize_components(
+            universe_mask_df=universe_mask,
+            returns_data=returns_data,
+            start_date=start_date,
+            end_date=end_date,
+            buffer_start_date=self._buffer_start_date
+        )
 
     def _load_returns(self) -> pd.DataFrame:
         """Load returns data from DataSource.
@@ -343,144 +360,143 @@ def get_cumulative_pnl(self, step: int) -> Optional[pd.Series]:
 
 ---
 
-#### C. `EvaluateVisitor` 구현 (Auto-Loading) (`visitor.py`)
+#### C. `EvaluateVisitor` 구현 (SRP 적용) (`visitor.py`)
 
-**Field 자동 로딩 (visit_field)**
+**컴포넌트 초기화 (initialize_components)**
+
+```python
+def initialize_components(
+    self,
+    universe_mask_df: pd.DataFrame,
+    returns_data: pd.DataFrame,
+    start_date: str,
+    end_date: str,
+    buffer_start_date: str
+):
+    """Initialize specialized components after construction.
+
+    This is called by AlphaExcel facade after visitor creation.
+    """
+    # Initialize UniverseMask
+    self._universe_mask = UniverseMask(universe_mask_df)
+
+    # Initialize StepTracker
+    self._step_tracker = StepTracker()
+
+    # Initialize FieldLoader if not already done
+    if self._field_loader is not None:
+        self._field_loader.set_universe_shape(
+            universe_mask_df.index,
+            universe_mask_df.columns
+        )
+        self._field_loader.set_date_range(start_date, end_date, buffer_start_date)
+
+    # Initialize BacktestEngine
+    self._backtest_engine = BacktestEngine(returns_data, self._universe_mask)
+```
+
+**Field 방문 (visit_field) - 위임 패턴**
 
 ```python
 def visit_field(self, node: Field) -> pd.DataFrame:
-    """Visit Field node with auto-loading from DataSource.
+    """Visit Field node: delegate to FieldLoader.
 
-    Workflow:
-    1. Check if field is cached in DataContext
-    2. If not cached, auto-load from DataSource
-    3. Reindex to match (dates, assets)
-    4. Apply INPUT MASKING (universe mask, always applied)
-    5. Cache in DataContext
-    6. Return masked result
+    Workflow (SRP 적용):
+    1. FieldLoader에 로딩 위임 (캐싱, 변환, reindex 모두 포함)
+    2. UniverseMask에 INPUT MASKING 위임
+    3. StepTracker에 signal 캐싱 위임
+    4. Return masked result
     """
-    # Step 1: Check cache
-    if node.name in self._ctx:
+    # Step 1: FieldLoader에 로딩 위임
+    if self._field_loader is None:
+        if node.name not in self._ctx:
+            raise RuntimeError(f"Field '{node.name}' not found in context")
         result = self._ctx[node.name]
     else:
-        # Step 2: Auto-load from DataSource
-        if self._data_source is None:
-            raise RuntimeError(
-                f"Field '{node.name}' not found in DataContext and no DataSource provided"
-            )
+        result = self._field_loader.load_field(node.name, node.data_type)
 
-        loaded_data = self._data_source.load_field(
-            node.name,
-            start_date=self._start_date,
-            end_date=self._end_date
-        )
+    # Step 2: UniverseMask에 INPUT MASKING 위임
+    result = self._universe_mask.apply_input_mask(result)
 
-        # Convert to pandas if necessary
-        if hasattr(loaded_data, 'to_pandas'):
-            result = loaded_data.to_pandas()
-        else:
-            result = loaded_data
+    # Step 3: StepTracker에 캐싱 위임
+    self._step_tracker.record_signal(f"Field_{node.name}", result)
 
-        # Step 3: Reindex to match coordinates
-        result = result.reindex(
-            index=self._ctx.dates,
-            columns=self._ctx.assets
-        )
+    # If scaler provided, compute weights and port_return
+    if self._scaler is not None:
+        self._cache_weights_and_returns(f"Field_{node.name}", result)
 
-        # Step 4: INPUT MASKING (no None check - always applied)
-        result = result.where(self._universe_mask, np.nan)
-
-        # Step 5: Cache
-        self._ctx[node.name] = result
-
-    # Increment step counter and cache signal
-    self._signal_cache[self._step_counter] = (f"Field_{node.name}", result)
-    self._step_counter += 1
+    # Step counter increment
+    self._step_tracker.increment_step()
 
     return result
 ```
 
-**연산자 평가 (visit_operator)**
+**연산자 방문 (visit_operator) - 위임 패턴**
 
 ```python
 def visit_operator(self, node: Expression) -> pd.DataFrame:
     """Visit operator node with OUTPUT MASKING.
 
-    Workflow:
+    Workflow (SRP 적용):
     1. Traverse children (depth-first)
     2. Delegate to operator's compute() method
-    3. Apply OUTPUT MASKING (universe mask, always applied)
-    4. Cache result
+    3. UniverseMask에 OUTPUT MASKING 위임
+    4. StepTracker에 캐싱 위임
     5. Return masked result
     """
-    # Step 1: Traverse (get compute method signature)
-    sig = inspect.signature(node.compute)
-    params = list(sig.parameters.keys())
+    # Step 1 & 2: Traverse and compute
+    # (traverse logic unchanged - detect child/left/right)
+    result = node.compute(child_result, visitor=self)
 
-    # Binary/Unary operator detection
-    if len(params) == 2:  # Binary: compute(left, right)
-        left_result = node.left.accept(self)
-        right_result = node.right.accept(self)
-        result = node.compute(left_result, right_result)
-    elif len(params) == 1:  # Unary: compute(child)
-        child_result = node.child.accept(self)
-        result = node.compute(child_result)
-    else:
-        raise ValueError(f"Unexpected compute signature for {type(node).__name__}")
+    # Step 3: UniverseMask에 OUTPUT MASKING 위임
+    result = self._universe_mask.apply_output_mask(result)
 
-    # Step 3: OUTPUT MASKING (no None check - always applied)
-    result = result.where(self._universe_mask, np.nan)
-
-    # Step 4: Cache
+    # Step 4: StepTracker에 캐싱 위임
     operator_name = type(node).__name__
-    self._signal_cache[self._step_counter] = (operator_name, result)
-
-    # If scaler provided, compute weights and port_return
-    if self._current_scaler is not None:
-        weights = self._current_scaler.scale(result)
-        self._weight_cache[self._step_counter] = (operator_name, weights)
-
-        # Compute portfolio return (shift-mask workflow)
-        port_return = self._compute_port_return(weights)
-        self._port_return_cache[self._step_counter] = (operator_name, port_return)
-    else:
-        self._weight_cache[self._step_counter] = (operator_name, None)
-        self._port_return_cache[self._step_counter] = (operator_name, None)
-
-    self._step_counter += 1
+    self._cache_signal_weights_and_returns(operator_name, result)
 
     return result
 ```
 
-**백테스트 로직 (shift-mask workflow)**
+**캐싱 로직 (cache_signal_weights_and_returns) - 위임 패턴**
 
 ```python
-def _compute_port_return(self, weights: pd.DataFrame) -> pd.DataFrame:
-    """Compute portfolio return using shift-mask workflow.
+def _cache_signal_weights_and_returns(self, name: str, signal: pd.DataFrame):
+    """Cache signal, weights, and returns using StepTracker and BacktestEngine.
 
-    Args:
-        weights: Portfolio weights (T, N)
-
-    Returns:
-        Position-level portfolio returns (T, N)
+    SRP 적용: 위임만 수행, 실제 계산은 전문 컴포넌트에서
     """
-    # 1. Shift: Next-day positioning
-    weights_shifted = weights.shift(1)
+    # StepTracker에 signal 기록
+    self._step_tracker.record_signal(name, signal)
 
-    # 2. Re-mask: Apply latest universe (handle universe changes)
-    final_weights = weights_shifted.where(self._universe_mask, 0)
+    # If scaler provided
+    if self._scaler is not None:
+        try:
+            # Compute weights using scaler
+            weights = self._scaler.scale(signal)
+            self._step_tracker.record_weights(name, weights)
 
-    # 3. Element-wise multiply: Position-level returns
-    port_return = final_weights * self._returns_data
+            # BacktestEngine에 portfolio return 계산 위임
+            if self._backtest_engine is not None:
+                port_return = self._backtest_engine.compute_portfolio_returns(weights)
+                self._step_tracker.record_port_return(name, port_return)
+            else:
+                self._step_tracker.record_port_return(name, None)
 
-    return port_return
+        except Exception as e:
+            # If scaling fails, cache None
+            self._step_tracker.record_weights(name, None)
+            self._step_tracker.record_port_return(name, None)
+
+    # Increment step counter
+    self._step_tracker.increment_step()
 ```
 
-**핵심 특징:**
-* ✅ **Auto-loading**: Field 최초 참조 시에만 DataSource.load_field() 호출
-* ✅ **No None checks**: Universe mask는 항상 적용 (초기화 시 None 처리 완료)
-* ✅ **Triple-cache**: signal, weight, port_return 모두 저장
-* ✅ **Shift-mask**: 백테스트 로직 통합 (scaler 제공 시)
+**핵심 특징 (SRP 적용 후):**
+* ✅ **Single Responsibility**: Visitor는 트리 순회만, 나머지는 전문 컴포넌트에 위임
+* ✅ **Testability**: 각 컴포넌트를 독립적으로 테스트 가능
+* ✅ **Maintainability**: 책임 분리로 코드 이해 및 수정 용이
+* ✅ **Reusability**: 컴포넌트를 다른 컨텍스트에서 재사용 가능
 
 ---
 
