@@ -22,7 +22,6 @@ dependencies = [
 
 [tool.poetry]
 packages = [
-    {include = "alpha_canvas", from = "src"},
     {include = "alpha_excel", from = "src"},
     {include = "alpha_database", from = "src"},
     {include = "alpha_lab", from = "src"},
