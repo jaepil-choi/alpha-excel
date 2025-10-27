@@ -28,15 +28,16 @@ class ConfigLoader:
         """Initialize ConfigLoader with configuration directory.
 
         Args:
-            config_dir: Path to directory containing data.yaml and settings.yaml
+            config_dir: Path to directory containing data.yaml, settings.yaml, and operators.yaml
         """
         self.config_dir = Path(config_dir)
         self.data_config: Dict = {}
         self.settings_config: Dict = {}
+        self.operators_config: Dict = {}
         self._load_configs()
 
     def _load_configs(self):
-        """Load data.yaml and settings.yaml configuration files."""
+        """Load data.yaml, settings.yaml, and operators.yaml configuration files."""
         # Load data.yaml
         data_yaml = self.config_dir / 'data.yaml'
         if data_yaml.exists():
@@ -56,6 +57,21 @@ class ConfigLoader:
             self.settings_config = {
                 'data_loading': {
                     'buffer_days': 252
+                }
+            }
+
+        # Load operators.yaml
+        operators_yaml = self.config_dir / 'operators.yaml'
+        if operators_yaml.exists():
+            with open(operators_yaml, 'r', encoding='utf-8') as f:
+                self.operators_config = yaml.safe_load(f) or {}
+        else:
+            # Initialize with defaults if file doesn't exist
+            self.operators_config = {
+                'timeseries': {
+                    'defaults': {
+                        'min_periods_ratio': 0.5
+                    }
                 }
             }
 
@@ -138,3 +154,30 @@ class ConfigLoader:
             else:
                 return default
         return value if value is not None else default
+
+    def get_operator_config(self, class_name: str, operator_type: str = 'timeseries') -> Dict:
+        """Get configuration for operator by class name.
+
+        Automatically merges category defaults with class-specific overrides.
+        Returns empty dict if operator or category not found (not an error).
+
+        Args:
+            class_name: Operator class name (e.g., 'TsMean', 'TsStdDev')
+            operator_type: Operator category (default: 'timeseries')
+
+        Returns:
+            Config dict (merged defaults + specific), or {} if not found
+
+        Example:
+            >>> config = ConfigLoader()
+            >>> ts_mean_config = config.get_operator_config('TsMean')
+            >>> print(ts_mean_config.get('min_periods_ratio'))  # 0.5
+            >>> ts_stddev_config = config.get_operator_config('TsStdDev')
+            >>> print(ts_stddev_config.get('min_periods_ratio'))  # 0.7
+        """
+        category = self.operators_config.get(operator_type, {})
+        defaults = category.get('defaults', {})
+        specific = category.get(class_name, {})
+
+        # Merge: specific overrides defaults
+        return {**defaults, **specific}

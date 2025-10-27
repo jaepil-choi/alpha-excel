@@ -23,11 +23,14 @@ class TsMean(Expression):
     def accept(self, visitor):
         return visitor.visit_operator(self)
 
-    def compute(self, child_result: pd.DataFrame) -> pd.DataFrame:
+    def compute(self, child_result: pd.DataFrame, visitor=None) -> pd.DataFrame:
         """Core computation logic for rolling mean - pure pandas."""
+        ratio = self.get_config(visitor, 'min_periods_ratio', 0.5)
+        min_periods = max(1, int(self.window * ratio))
+
         return child_result.rolling(
             window=self.window,
-            min_periods=self.window
+            min_periods=min_periods
         ).mean()
 
 
@@ -48,10 +51,13 @@ class TsMax(Expression):
     def accept(self, visitor):
         return visitor.visit_operator(self)
 
-    def compute(self, child_result: pd.DataFrame) -> pd.DataFrame:
+    def compute(self, child_result: pd.DataFrame, visitor=None) -> pd.DataFrame:
+        ratio = self.get_config(visitor, 'min_periods_ratio', 0.3)
+        min_periods = max(1, int(self.window * ratio))
+
         return child_result.rolling(
             window=self.window,
-            min_periods=self.window
+            min_periods=min_periods
         ).max()
 
 
@@ -72,10 +78,13 @@ class TsMin(Expression):
     def accept(self, visitor):
         return visitor.visit_operator(self)
 
-    def compute(self, child_result: pd.DataFrame) -> pd.DataFrame:
+    def compute(self, child_result: pd.DataFrame, visitor=None) -> pd.DataFrame:
+        ratio = self.get_config(visitor, 'min_periods_ratio', 0.3)
+        min_periods = max(1, int(self.window * ratio))
+
         return child_result.rolling(
             window=self.window,
-            min_periods=self.window
+            min_periods=min_periods
         ).min()
 
 
@@ -96,10 +105,13 @@ class TsSum(Expression):
     def accept(self, visitor):
         return visitor.visit_operator(self)
 
-    def compute(self, child_result: pd.DataFrame) -> pd.DataFrame:
+    def compute(self, child_result: pd.DataFrame, visitor=None) -> pd.DataFrame:
+        ratio = self.get_config(visitor, 'min_periods_ratio', 0.3)
+        min_periods = max(1, int(self.window * ratio))
+
         return child_result.rolling(
             window=self.window,
-            min_periods=self.window
+            min_periods=min_periods
         ).sum()
 
 
@@ -120,10 +132,13 @@ class TsStdDev(Expression):
     def accept(self, visitor):
         return visitor.visit_operator(self)
 
-    def compute(self, child_result: pd.DataFrame) -> pd.DataFrame:
+    def compute(self, child_result: pd.DataFrame, visitor=None) -> pd.DataFrame:
+        ratio = self.get_config(visitor, 'min_periods_ratio', 0.7)
+        min_periods = max(1, int(self.window * ratio))
+
         return child_result.rolling(
             window=self.window,
-            min_periods=self.window
+            min_periods=min_periods
         ).std()
 
 
@@ -195,11 +210,14 @@ class TsProduct(Expression):
     def accept(self, visitor):
         return visitor.visit_operator(self)
 
-    def compute(self, child_result: pd.DataFrame) -> pd.DataFrame:
+    def compute(self, child_result: pd.DataFrame, visitor=None) -> pd.DataFrame:
         """Core computation logic for rolling product."""
+        ratio = self.get_config(visitor, 'min_periods_ratio', 0.6)
+        min_periods = max(1, int(self.window * ratio))
+
         return child_result.rolling(
             window=self.window,
-            min_periods=self.window
+            min_periods=min_periods
         ).apply(lambda x: x.prod(), raw=True)
 
 
@@ -230,9 +248,12 @@ class TsArgMax(Expression):
     def accept(self, visitor):
         return visitor.visit_operator(self)
 
-    def compute(self, child_result: pd.DataFrame) -> pd.DataFrame:
+    def compute(self, child_result: pd.DataFrame, visitor=None) -> pd.DataFrame:
         """Core computation logic for time-series argmax."""
         import numpy as np
+
+        ratio = self.get_config(visitor, 'min_periods_ratio', 0.5)
+        min_periods = max(1, int(self.window * ratio))
 
         def argmax_days_ago(window_vals):
             """Convert argmax to days ago (0=today, window-1=oldest)."""
@@ -243,7 +264,7 @@ class TsArgMax(Expression):
 
         return child_result.rolling(
             window=self.window,
-            min_periods=self.window
+            min_periods=min_periods
         ).apply(argmax_days_ago, raw=True)
 
 
@@ -274,9 +295,12 @@ class TsArgMin(Expression):
     def accept(self, visitor):
         return visitor.visit_operator(self)
 
-    def compute(self, child_result: pd.DataFrame) -> pd.DataFrame:
+    def compute(self, child_result: pd.DataFrame, visitor=None) -> pd.DataFrame:
         """Core computation logic for time-series argmin."""
         import numpy as np
+
+        ratio = self.get_config(visitor, 'min_periods_ratio', 0.5)
+        min_periods = max(1, int(self.window * ratio))
 
         def argmin_days_ago(window_vals):
             """Convert argmin to days ago (0=today, window-1=oldest)."""
@@ -287,7 +311,7 @@ class TsArgMin(Expression):
 
         return child_result.rolling(
             window=self.window,
-            min_periods=self.window
+            min_periods=min_periods
         ).apply(argmin_days_ago, raw=True)
 
 
@@ -321,9 +345,12 @@ class TsCorr(Expression):
     def accept(self, visitor):
         return visitor.visit_operator(self)
 
-    def compute(self, left_result: pd.DataFrame, right_result: pd.DataFrame) -> pd.DataFrame:
+    def compute(self, left_result: pd.DataFrame, right_result: pd.DataFrame, visitor=None) -> pd.DataFrame:
         """Compute rolling Pearson correlation."""
         import numpy as np
+
+        ratio = self.get_config(visitor, 'min_periods_ratio', 0.7)
+        min_periods = max(1, int(self.window * ratio))
 
         # Initialize result
         result = pd.DataFrame(
@@ -340,7 +367,7 @@ class TsCorr(Expression):
             # Use pandas rolling corr
             result[col] = left_series.rolling(
                 window=self.window,
-                min_periods=self.window
+                min_periods=min_periods
             ).corr(right_series)
 
         return result
@@ -376,9 +403,12 @@ class TsCovariance(Expression):
     def accept(self, visitor):
         return visitor.visit_operator(self)
 
-    def compute(self, left_result: pd.DataFrame, right_result: pd.DataFrame) -> pd.DataFrame:
+    def compute(self, left_result: pd.DataFrame, right_result: pd.DataFrame, visitor=None) -> pd.DataFrame:
         """Compute rolling covariance."""
         import numpy as np
+
+        ratio = self.get_config(visitor, 'min_periods_ratio', 0.7)
+        min_periods = max(1, int(self.window * ratio))
 
         # Initialize result
         result = pd.DataFrame(
@@ -395,7 +425,7 @@ class TsCovariance(Expression):
             # Use pandas rolling cov
             result[col] = left_series.rolling(
                 window=self.window,
-                min_periods=self.window
+                min_periods=min_periods
             ).cov(right_series)
 
         return result
@@ -430,15 +460,18 @@ class TsCountNans(Expression):
     def accept(self, visitor):
         return visitor.visit_operator(self)
 
-    def compute(self, child_result: pd.DataFrame) -> pd.DataFrame:
+    def compute(self, child_result: pd.DataFrame, visitor=None) -> pd.DataFrame:
         """Count NaN values in rolling window."""
+        ratio = self.get_config(visitor, 'min_periods_ratio', 0.5)
+        min_periods = max(1, int(self.window * ratio))
+
         # Convert boolean NaN mask to float for summation
         is_nan = child_result.isna().astype(float)
 
         # Sum NaN indicators over rolling window
         nan_count = is_nan.rolling(
             window=self.window,
-            min_periods=self.window
+            min_periods=min_periods
         ).sum()
 
         return nan_count
@@ -473,9 +506,12 @@ class TsRank(Expression):
     def accept(self, visitor):
         return visitor.visit_operator(self)
 
-    def compute(self, child_result: pd.DataFrame) -> pd.DataFrame:
+    def compute(self, child_result: pd.DataFrame, visitor=None) -> pd.DataFrame:
         """Compute rolling rank of current value."""
         import numpy as np
+
+        ratio = self.get_config(visitor, 'min_periods_ratio', 0.5)
+        min_periods = max(1, int(self.window * ratio))
 
         def compute_rank(window_vals):
             """Compute normalized rank of last value in window."""
@@ -506,7 +542,7 @@ class TsRank(Expression):
 
         return child_result.rolling(
             window=self.window,
-            min_periods=self.window
+            min_periods=min_periods
         ).apply(compute_rank, raw=True)
 
 
@@ -537,14 +573,17 @@ class TsAny(Expression):
     def accept(self, visitor):
         return visitor.visit_operator(self)
 
-    def compute(self, child_result: pd.DataFrame) -> pd.DataFrame:
+    def compute(self, child_result: pd.DataFrame, visitor=None) -> pd.DataFrame:
         """Core computation logic for rolling any."""
         import numpy as np
+
+        ratio = self.get_config(visitor, 'min_periods_ratio', 0.5)
+        min_periods = max(1, int(self.window * ratio))
 
         # Sum counts True values (True=1, False=0)
         count_true = child_result.astype(float).rolling(
             window=self.window,
-            min_periods=self.window
+            min_periods=min_periods
         ).sum()
 
         # Any True in window? (count > 0)
@@ -583,14 +622,17 @@ class TsAll(Expression):
     def accept(self, visitor):
         return visitor.visit_operator(self)
 
-    def compute(self, child_result: pd.DataFrame) -> pd.DataFrame:
+    def compute(self, child_result: pd.DataFrame, visitor=None) -> pd.DataFrame:
         """Core computation logic for rolling all."""
         import numpy as np
+
+        ratio = self.get_config(visitor, 'min_periods_ratio', 0.5)
+        min_periods = max(1, int(self.window * ratio))
 
         # Sum counts True values (True=1, False=0)
         count_true = child_result.astype(float).rolling(
             window=self.window,
-            min_periods=self.window
+            min_periods=min_periods
         ).sum()
 
         # All True in window? (count == window size)

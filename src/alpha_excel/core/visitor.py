@@ -36,17 +36,17 @@ class EvaluateVisitor:
         >>> result_df = visitor.evaluate(field)
     """
 
-    def __init__(self, ctx: DataContext, data_source=None, config=None):
+    def __init__(self, ctx: DataContext, data_source=None, config_loader=None):
         """Initialize EvaluateVisitor with DataContext.
 
         Args:
             ctx: DataContext containing cached data variables
             data_source: Optional DataSource for loading fields
-            config: Optional ConfigLoader for field metadata (forward_fill, data_type)
+            config_loader: Optional ConfigLoader for field metadata and operator configs
         """
         self._ctx = ctx
         self._data_source = data_source
-        self._config = config
+        self.config_loader = config_loader  # Public - used by operators via get_config()
         self._universe_mask: Optional[pd.DataFrame] = None  # Set by AlphaExcel (always present)
 
         # Date range (set by AlphaExcel after construction)
@@ -171,9 +171,9 @@ class EvaluateVisitor:
                 )
             # Get field metadata from config
             field_config = None
-            if self._config is not None:
+            if self.config_loader is not None:
                 try:
-                    field_config = self._config.get_field(node.name)
+                    field_config = self.config_loader.get_field(node.name)
                 except KeyError:
                     # Field not in config - that's okay
                     field_config = None
@@ -289,18 +289,18 @@ class EvaluateVisitor:
             operand_results = [op.accept(self) for op in node.operands]
 
             if group_labels is not None:
-                result = node.compute(*operand_results, group_labels)
+                result = node.compute(*operand_results, group_labels, visitor=self)
             else:
-                result = node.compute(*operand_results)
+                result = node.compute(*operand_results, visitor=self)
 
         elif hasattr(node, 'child'):
             # Single child operator
             child_result = node.child.accept(self)
 
             if group_labels is not None:
-                result = node.compute(child_result, group_labels)
+                result = node.compute(child_result, group_labels, visitor=self)
             else:
-                result = node.compute(child_result)
+                result = node.compute(child_result, visitor=self)
 
         elif hasattr(node, 'left') and hasattr(node, 'right'):
             # Binary operator
@@ -308,10 +308,10 @@ class EvaluateVisitor:
 
             if isinstance(node.right, Expression):
                 right_result = node.right.accept(self)
-                result = node.compute(left_result, right_result)
+                result = node.compute(left_result, right_result, visitor=self)
             else:
                 # Right is literal
-                result = node.compute(left_result)
+                result = node.compute(left_result, visitor=self)
 
         elif hasattr(node, 'base') and hasattr(node, 'exponent'):
             # Power-like operator
@@ -319,18 +319,18 @@ class EvaluateVisitor:
 
             if isinstance(node.exponent, Expression):
                 exp_result = node.exponent.accept(self)
-                result = node.compute(base_result, exp_result)
+                result = node.compute(base_result, exp_result, visitor=self)
             else:
-                result = node.compute(base_result)
+                result = node.compute(base_result, visitor=self)
 
         elif group_labels is not None and not hasattr(node, 'child'):
             # Special case: operators that only need group_labels (e.g., GroupCount)
-            result = node.compute(group_labels)
+            result = node.compute(group_labels, visitor=self)
 
         else:
             # Fallback
             child_result = node.child.accept(self)
-            result = node.compute(child_result)
+            result = node.compute(child_result, visitor=self)
 
         # OUTPUT MASKING: Apply universe to operator result
         result = result.where(self._universe_mask, np.nan)

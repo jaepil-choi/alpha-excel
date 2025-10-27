@@ -1,0 +1,67 @@
+# Operator Configuration for alpha-excel
+#
+# This file configures behavior of operators that need tunable parameters.
+# Operators read these values during evaluation to apply sensible defaults.
+#
+# Structure:
+#   <operator_category>:
+#     defaults:
+#       <param>: <value>  # Applied to all operators in category
+#     <OperatorClassName>:
+#       <param>: <value>  # Override for specific operator
+
+# ============================================================================
+# Time-Series Operators
+# ============================================================================
+
+timeseries:
+  # Global defaults for all time-series rolling operators
+  defaults:
+    # min_periods_ratio: Fraction of window size required for valid result
+    # - 1.0 = require full window (conservative, many NaNs)
+    # - 0.5 = require half window (balanced)
+    # - 0.3 = require 30% of window (lenient, fewer NaNs)
+    min_periods_ratio: 0.5
+
+  # Statistical operators need more data for validity
+  TsStdDev:
+    min_periods_ratio: 0.7  # Standard deviation needs more samples
+
+  TsCorr:
+    min_periods_ratio: 0.7  # Correlation needs sufficient observations
+
+  TsCovariance:
+    min_periods_ratio: 0.7  # Covariance needs sufficient observations
+
+  # Aggregation operators can be more lenient
+  TsSum:
+    min_periods_ratio: 0.3  # Sum less sensitive to missing data
+
+  TsMax:
+    min_periods_ratio: 0.3  # Max/Min less affected by partial windows
+
+  TsMin:
+    min_periods_ratio: 0.3
+
+  TsMean:
+    min_periods_ratio: 0.5  # Default (could omit, just showing explicit)
+
+  # Compound returns need decent coverage
+  TsProduct:
+    min_periods_ratio: 0.6  # Product sensitive to missing values
+
+  # Rank-based operators
+  TsRank:
+    min_periods_ratio: 0.5  # Rank needs reasonable sample size
+
+# ============================================================================
+# Future: Other Operator Categories
+# ============================================================================
+
+# crosssection:
+#   defaults:
+#     # Future cross-sectional operator configs
+
+# group:
+#   defaults:
+#     # Future group operator configs

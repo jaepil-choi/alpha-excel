@@ -89,7 +89,34 @@ class Expression(ABC):
             Result of visiting this node (pandas DataFrame)
         """
         pass
-    
+
+    def get_config(self, visitor, key: str, default):
+        """Get operator config value from visitor.
+
+        This is a convenience method for operators to access their configuration
+        without dealing with visitor null checks and config lookups.
+
+        Args:
+            visitor: EvaluateVisitor instance (passed in compute() method)
+            key: Config key to retrieve (e.g., 'min_periods_ratio')
+            default: Default value if config not available or visitor is None
+
+        Returns:
+            Config value from operators.yaml, or default
+
+        Example (in operator's compute method):
+            >>> def compute(self, child_result: pd.DataFrame, visitor=None) -> pd.DataFrame:
+            >>>     ratio = self.get_config(visitor, 'min_periods_ratio', 0.5)
+            >>>     min_periods = max(1, int(self.window * ratio))
+            >>>     return child_result.rolling(window=self.window, min_periods=min_periods).mean()
+        """
+        if visitor is None:
+            return default
+
+        # Get config for this operator class
+        config = visitor.config_loader.get_operator_config(self.__class__.__name__)
+        return config.get(key, default)
+
     # Comparison operators (create Boolean Expressions)
     def __eq__(self, other):
         """Equality comparison → Equals Expression.

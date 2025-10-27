@@ -151,8 +151,8 @@ class AlphaExcel:
         # Store returns
         self.ctx['returns'] = returns_data
 
-        # Initialize evaluator with config
-        self._evaluator = EvaluateVisitor(self.ctx, data_source=data_source, config=self._config)
+        # Initialize evaluator with config loader
+        self._evaluator = EvaluateVisitor(self.ctx, data_source=data_source, config_loader=self._config)
         self._evaluator._start_date = start_date
         self._evaluator._end_date = end_date
         self._evaluator._buffer_start_date = self._buffer_start_date  # Pass buffer to visitor
