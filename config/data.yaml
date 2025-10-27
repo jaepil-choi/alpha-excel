@@ -301,17 +301,21 @@ fnguide_earnings_announcement:
   data_type: event
   forward_fill: false
   table: FNGUIDE_IR_EVENTS
-  index_col: event_date
+  index_col: date
   security_col: symbol
   value_col: has_event
   query: >
     SELECT
-      event_date as date,
+      CASE
+        WHEN LENGTH(event_date) = 8 THEN STRPTIME(event_date, '%Y%m%d')
+        ELSE TRY_CAST(LEFT(event_date, 10) AS DATE)
+      END as date,
       symbol,
-      1 as has_event
+      MAX(1) as has_event
     FROM read_parquet('data/fnguide/ir_events/**/*.parquet', hive_partitioning=true)
     WHERE event_code = 'IR1'
       AND category = '실적발표'
       AND event_date >= :start_date
       AND event_date <= :end_date
+    GROUP BY date, symbol
 

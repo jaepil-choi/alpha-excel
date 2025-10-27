@@ -4497,3 +4497,139 @@ Successfully tested FnGuide IR events API using curl_cffi. The API returns JSON 
 4. Consider adding event-based trading strategies
 
 ---
+
+## Experiment 32: IR Events Data Loading via AlphaExcel
+
+**Date**: 2025-10-27
+**Script**: `experiments/exp_32_ir_events_loading.py`
+**Goal**: Verify FnGuide IR events data can be loaded via alpha-excel Field interface and validate event data structure.
+
+### Summary
+
+Successfully loaded earnings announcement events through `Field('fnguide_earnings_announcement')` after fixing duplicate index issue with GROUP BY aggregation. Event data structure works correctly with boolean indicators (1 = event occurred, NaN = no event).
+
+### Key Findings
+
+1. **Initial Duplicate Index Error**
+   - **Problem**: Multiple events on same (date, symbol) pair caused pivot failure
+   - **Error**: `ValueError: Index contains duplicate entries, cannot reshape`
+   - **Root cause**: Query returned duplicates when same stock had multiple announcements on same date
+   - **Fix**: Added `GROUP BY date, symbol` with `MAX(1) as has_event` to aggregate duplicates
+
+2. **Event Data Characteristics**
+   - **Coverage**: 0.089% of universe (156 events in 175,305 cells)
+   - **Event dates**: 26 days with announcements (out of 65 trading days)
+   - **Boolean structure**: All event values = 1 (correctly formatted)
+   - **Sparsity**: Very sparse data (expected for event indicators)
+
+3. **Data Alignment Validation**
+   - ✅ Same shape as universe (65, 2697)
+   - ✅ Same dates (index matches)
+   - ✅ Same symbols (columns match)
+   - ✅ All events within investable universe (0 events outside)
+
+4. **Operator Compatibility**
+   - ✅ TsSum works (counts announcements in rolling window)
+   - ✅ TsMax works (detects any announcement in rolling window)
+   - ⚠️ Results mostly NaN due to sparse event data (expected behavior)
+
+5. **Date Parsing Complexity**
+   - **Challenge**: Three different date formats in raw data:
+     - `"2025-08-01 10:00"` (datetime with time)
+     - `"2025-07-25 --:--"` (datetime with placeholder)
+     - `"20250901"` (compact YYYYMMDD)
+   - **Solution**: CASE statement in SQL query to handle all formats:
+     ```sql
+     CASE
+       WHEN LENGTH(event_date) = 8 THEN STRPTIME(event_date, '%Y%m%d')
+       ELSE TRY_CAST(LEFT(event_date, 10) AS DATE)
+     END as date
+     ```
+
+### Technical Implementation
+
+**Final Query in config/data.yaml**:
+```yaml
+fnguide_earnings_announcement:
+  query: >
+    SELECT
+      CASE
+        WHEN LENGTH(event_date) = 8 THEN STRPTIME(event_date, '%Y%m%d')
+        ELSE TRY_CAST(LEFT(event_date, 10) AS DATE)
+      END as date,
+      symbol,
+      MAX(1) as has_event
+    FROM read_parquet('data/fnguide/ir_events/**/*.parquet', hive_partitioning=true)
+    WHERE event_code = 'IR1'
+      AND category = '실적발표'
+      AND event_date >= :start_date
+      AND event_date <= :end_date
+    GROUP BY date, symbol
+```
+
+**Key design decisions**:
+- `GROUP BY date, symbol`: Ensures unique (date, symbol) pairs for pivot operation
+- `MAX(1)`: Aggregates duplicate events (always returns 1)
+- `CASE` for date parsing: Handles inconsistent date formats in source data
+- `TRY_CAST`: Gracefully handles malformed dates without crashing
+
+### Experiment Sections
+
+1. **Section 1**: AlphaExcel initialization (65 days, 2,697 assets)
+2. **Section 2**: Load earnings events via Field() - SUCCESS
+3. **Section 3**: Examine sample events (26 event dates found)
+4. **Section 4**: Test with operators (TsSum, TsMax) - works but sparse results
+5. **Section 5**: Validate data alignment with universe - PASS
+6. **Section 6**: Sample use case (post-earnings momentum) - demonstrates workflow
+
+### Use Cases Demonstrated
+
+1. **Post-earnings drift analysis**: Track returns after earnings announcements
+2. **Event exclusion**: Avoid trading around earnings using TsMax
+3. **Event-driven strategies**: Identify stocks with recent announcements using TsSum
+4. **Factor combination**: Combine earnings events with other factors (momentum, value, etc.)
+
+### Lessons Learned
+
+1. **Event data requires GROUP BY**
+   - Multiple events on same (date, symbol) are common
+   - Always aggregate when pivoting event data
+   - Use MAX() or ANY() for boolean indicators
+
+2. **Date parsing is non-trivial**
+   - Real-world data has inconsistent formats
+   - Use CASE statements for robustness
+   - TRY_CAST prevents crashes on malformed data
+
+3. **Sparse data is normal for events**
+   - 0.089% coverage is expected (not all stocks have earnings every day)
+   - Operators work correctly, just return mostly NaN
+   - Use `.notna()` or `> 0` filters to find actual events
+
+4. **SQL-based aggregation is cleaner**
+   - Better to aggregate in query than post-process DataFrames
+   - DuckDB GROUP BY is fast and clean
+   - Keeps data loading logic in config, not scattered in code
+
+### Files Modified
+
+- [x] `config/data.yaml`: Fixed duplicate index issue with GROUP BY
+- [x] `experiments/exp_32_ir_events_loading.py`: Created comprehensive test
+
+### Validation Results
+
+**Test Status**: ✅ PASS
+- IR events load successfully through Field interface
+- Data structure correct (boolean indicators)
+- Alignment with universe validated
+- Operators work as expected with sparse event data
+- Ready for use in alpha-excel expressions
+
+### Next Steps
+
+1. ✅ IR events data loading verified and working
+2. Run full ETL to fetch historical data: `poetry run python scripts/etl_fnguide_ir_events.py -f`
+3. Create event-based strategy showcases
+4. Add more event types (dividends, splits) if needed
+
+---
