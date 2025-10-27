@@ -35,33 +35,36 @@ class DataSource:
         >>> custom_data = ds.load_field('custom_field', '2024-01-01', '2024-12-31')
     """
     
-    def __init__(self, config_path: str = 'config/data.yaml'):
+    def __init__(self, config_path: str = None):
         """Initialize DataSource with config path.
-        
+
+        If config_path is not provided, automatically finds project root and uses
+        '<project_root>/config' directory. This allows DataSource to work from
+        any subdirectory (notebooks/, scripts/, etc.) without manual path specification.
+
         Args:
-            config_path: Path to data configuration YAML file or directory
-                         If directory, looks for 'data.yaml' inside
-                         Default: 'config/data.yaml'
-        
+            config_path: Path to data configuration directory
+                        If None (default), auto-discovers project root
+                        Legacy: accepts 'config/data.yaml' and extracts directory
+
         Example:
-            >>> # Using default config
+            >>> # Auto-discover config (works from anywhere in project)
             >>> ds = DataSource()
-            
-            >>> # Using custom config path
-            >>> ds = DataSource('custom_config/data.yaml')
+
+            >>> # Manual config directory
+            >>> ds = DataSource('custom_config')
         """
-        # Determine if config_path is a file or directory
-        if config_path.endswith('.yaml') or config_path.endswith('.yml'):
+        # Handle legacy file paths (e.g., 'config/data.yaml' -> 'config')
+        if config_path is not None and (config_path.endswith('.yaml') or config_path.endswith('.yml')):
             # Extract directory path
-            config_dir = '/'.join(config_path.split('/')[:-1]) or 'config'
+            config_dir = '/'.join(config_path.split('/')[:-1]) or None
         else:
-            # Assume it's a directory
             config_dir = config_path
-        
-        # Initialize components
+
+        # Initialize components (ConfigLoader handles auto-discovery if None)
         self._config = ConfigLoader(config_dir)
         self._data_loader = DataLoader()
-        
+
         # Register core readers
         self._readers: Dict[str, BaseReader] = {
             'parquet': ParquetReader(),
@@ -138,7 +141,11 @@ class DataSource:
             'start_date': start_date,
             'end_date': end_date
         }
-        df_long = reader.read(field_config['query'], params)
+        df_long = reader.read(
+            field_config['query'],
+            params,
+            project_root=self._config.project_root
+        )
 
         # Step 4: Pivot to wide format (pandas DataFrame)
         df_wide = df_long.pivot(

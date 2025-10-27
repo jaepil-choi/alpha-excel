@@ -28,7 +28,7 @@ class Rank(Expression):
     def accept(self, visitor):
         return visitor.visit_operator(self)
 
-    def compute(self, child_result: pd.DataFrame) -> pd.DataFrame:
+    def compute(self, child_result: pd.DataFrame, visitor=None) -> pd.DataFrame:
         """Cross-sectional percentile ranking using pandas.
 
         This is MUCH simpler than the xarray version!

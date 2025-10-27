@@ -5,7 +5,8 @@ This module defines the abstract base class for all data readers.
 """
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict
+from typing import Any, Dict, Optional
+from pathlib import Path
 import pandas as pd
 
 
@@ -24,29 +25,32 @@ class BaseReader(ABC):
     """
     
     @abstractmethod
-    def read(self, query: str, params: Dict[str, Any]) -> pd.DataFrame:
+    def read(self, query: str, params: Dict[str, Any], project_root: Optional[Path] = None) -> pd.DataFrame:
         """Read data and return long-format DataFrame.
-        
+
         Args:
             query: Query string (format depends on reader implementation)
                    For file-based readers: SQL query for DuckDB
                    For DB readers: Native SQL query
             params: Query parameters (e.g., {'start_date': '2024-01-01', 'end_date': '2024-12-31'})
-        
+            project_root: Path to project root directory (for resolving relative paths)
+                         If None, paths are used as-is
+
         Returns:
             Long-format DataFrame with at least these columns:
             - Time column (date/datetime)
             - Asset column (security identifier)
             - Value column (numeric data)
-        
+
         Raises:
             NotImplementedError: If subclass doesn't implement this method
-        
+
         Example:
             >>> reader = ParquetReader()
             >>> df = reader.read(
             ...     query="SELECT * FROM parquet_file WHERE date >= :start_date",
-            ...     params={'start_date': '2024-01-01', 'end_date': '2024-12-31'}
+            ...     params={'start_date': '2024-01-01', 'end_date': '2024-12-31'},
+            ...     project_root=Path('/path/to/project')
             ... )
         """
         pass

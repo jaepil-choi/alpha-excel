@@ -56,7 +56,8 @@ class GroupMax(Expression):
     def compute(
         self,
         child_result: pd.DataFrame,
-        group_labels: pd.DataFrame
+        group_labels: pd.DataFrame,
+        visitor=None
     ) -> pd.DataFrame:
         """Apply group max - broadcast maximum to all group members.
 
@@ -120,7 +121,8 @@ class GroupMin(Expression):
     def compute(
         self,
         child_result: pd.DataFrame,
-        group_labels: pd.DataFrame
+        group_labels: pd.DataFrame,
+        visitor=None
     ) -> pd.DataFrame:
         """Apply group min - broadcast minimum to all group members.
 
@@ -186,7 +188,8 @@ class GroupSum(Expression):
     def compute(
         self,
         child_result: pd.DataFrame,
-        group_labels: pd.DataFrame
+        group_labels: pd.DataFrame,
+        visitor=None
     ) -> pd.DataFrame:
         """Apply group sum - broadcast sum to all group members.
 
@@ -250,7 +253,7 @@ class GroupCount(Expression):
     def accept(self, visitor):
         return visitor.visit_operator(self)
 
-    def compute(self, group_labels: pd.DataFrame) -> pd.DataFrame:
+    def compute(self, group_labels: pd.DataFrame, visitor=None) -> pd.DataFrame:
         """Apply group count - broadcast count to all group members.
 
         Args:
@@ -304,7 +307,7 @@ class GroupNeutralize(Expression):
     def accept(self, visitor):
         return visitor.visit_operator(self)
 
-    def compute(self, child_result: pd.DataFrame, group_labels: pd.DataFrame) -> pd.DataFrame:
+    def compute(self, child_result: pd.DataFrame, group_labels: pd.DataFrame, visitor=None) -> pd.DataFrame:
         """Subtract group mean using pandas groupby.
 
         This is the power of pandas - groupby makes this trivial!
@@ -323,11 +326,26 @@ class GroupNeutralize(Expression):
             row_data = child_result.loc[idx]
             row_groups = group_labels.loc[idx]
 
-            # Group by sector labels and subtract mean
-            grouped = pd.DataFrame({'value': row_data, 'group': row_groups}).groupby('group')
-            neutralized = grouped.transform(lambda x: x - x.mean())
+            # Create temporary DataFrame for grouping
+            temp_df = pd.DataFrame({'value': row_data, 'group': row_groups})
 
-            result.loc[idx] = neutralized['value'].values
+            # Filter out rows where value OR group is NaN (these will remain NaN in result)
+            valid_mask = temp_df['value'].notna() & temp_df['group'].notna()
+            valid_df = temp_df[valid_mask]
+
+            if len(valid_df) > 0:
+                # Group by sector labels and subtract mean
+                grouped = valid_df.groupby('group')
+                neutralized_values = grouped['value'].transform(lambda x: x - x.mean())
+
+                # Reconstruct full result with NaN preserved
+                neutralized_series = pd.Series(index=temp_df.index, dtype=float)
+                neutralized_series[valid_mask] = neutralized_values.values
+            else:
+                # All NaN - result is all NaN
+                neutralized_series = pd.Series(index=temp_df.index, dtype=float)
+
+            result.loc[idx] = neutralized_series.values
 
         return result
 
@@ -355,7 +373,7 @@ class GroupRank(Expression):
     def accept(self, visitor):
         return visitor.visit_operator(self)
 
-    def compute(self, child_result: pd.DataFrame, group_labels: pd.DataFrame) -> pd.DataFrame:
+    def compute(self, child_result: pd.DataFrame, group_labels: pd.DataFrame, visitor=None) -> pd.DataFrame:
         """Rank within groups using pandas groupby.
 
         Args:

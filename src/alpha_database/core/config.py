@@ -7,19 +7,70 @@ Independent implementation (not imported from alpha-canvas) to maintain loose co
 
 import yaml
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
+
+
+def find_project_root(start_path: Optional[Path] = None) -> Path:
+    """Find project root by walking up directory tree.
+
+    Searches for project markers (pyproject.toml, .git, config/) starting from
+    the current working directory and walking up to parent directories.
+
+    Args:
+        start_path: Starting directory (defaults to current working directory)
+
+    Returns:
+        Path to project root directory
+
+    Raises:
+        FileNotFoundError: If project root cannot be found
+
+    Example:
+        >>> # From notebooks/ directory
+        >>> root = find_project_root()
+        >>> print(root)  # /path/to/alpha-excel
+    """
+    if start_path is None:
+        start_path = Path.cwd()
+
+    current = start_path.resolve()
+
+    # Walk up directory tree (max 10 levels to avoid infinite loop)
+    for _ in range(10):
+        # Check for project markers
+        markers = [
+            current / 'pyproject.toml',
+            current / '.git',
+            current / 'config' / 'data.yaml',
+        ]
+
+        if any(marker.exists() for marker in markers):
+            return current
+
+        # Move to parent directory
+        parent = current.parent
+        if parent == current:  # Reached filesystem root
+            break
+        current = parent
+
+    # If not found, raise error with helpful message
+    raise FileNotFoundError(
+        "Could not find project root. Please ensure you are running from within "
+        "the alpha-excel project directory (should contain pyproject.toml or .git)"
+    )
 
 
 class ConfigLoader:
     """Load and manage YAML configuration files for data sources.
-    
+
     The ConfigLoader reads configuration files and provides methods to access
     field definitions. This is alpha-database's independent config loader.
-    
+
     Attributes:
+        project_root: Path to the project root directory (auto-discovered or inferred)
         config_dir: Path to the configuration directory
         data_config: Dictionary containing all data field definitions from data.yaml
-    
+
     Example:
         >>> loader = ConfigLoader(config_dir='config')
         >>> fields = loader.list_fields()
@@ -27,13 +78,34 @@ class ConfigLoader:
         >>> print(adj_close_def['table'])  # 'PRICEVOLUME'
     """
     
-    def __init__(self, config_dir: str = 'config'):
+    def __init__(self, config_dir: Optional[str] = None):
         """Initialize ConfigLoader with specified configuration directory.
-        
+
+        If config_dir is not provided, automatically finds project root and uses
+        '<project_root>/config' directory. This allows ConfigLoader to work from
+        any subdirectory (notebooks/, scripts/, etc.) without manual path specification.
+
         Args:
-            config_dir: Path to directory containing YAML config files (default: 'config')
+            config_dir: Path to directory containing YAML config files
+                       If None (default), auto-discovers project root
+
+        Example:
+            >>> # Auto-discover (works from notebooks/, scripts/, root, etc.)
+            >>> loader = ConfigLoader()
+
+            >>> # Manual path (for non-standard locations)
+            >>> loader = ConfigLoader('custom_config')
         """
-        self.config_dir = Path(config_dir)
+        if config_dir is None:
+            # Auto-discover project root and use config/ subdirectory
+            self.project_root = find_project_root()
+            self.config_dir = self.project_root / 'config'
+        else:
+            # Manual config dir: infer project root as parent
+            self.config_dir = Path(config_dir)
+            # Assume project root is parent of config directory
+            self.project_root = self.config_dir.parent if self.config_dir.name == 'config' else self.config_dir
+
         self.data_config: Dict = {}
         self._load_configs()
     

@@ -10,6 +10,56 @@ from pathlib import Path
 from typing import Dict, Optional
 
 
+def find_project_root(start_path: Optional[Path] = None) -> Path:
+    """Find project root by walking up directory tree.
+
+    Searches for project markers (pyproject.toml, .git, config/) starting from
+    the current working directory and walking up to parent directories.
+
+    Args:
+        start_path: Starting directory (defaults to current working directory)
+
+    Returns:
+        Path to project root directory
+
+    Raises:
+        FileNotFoundError: If project root cannot be found
+
+    Example:
+        >>> # From notebooks/ directory
+        >>> root = find_project_root()
+        >>> print(root)  # /path/to/alpha-excel
+    """
+    if start_path is None:
+        start_path = Path.cwd()
+
+    current = start_path.resolve()
+
+    # Walk up directory tree (max 10 levels to avoid infinite loop)
+    for _ in range(10):
+        # Check for project markers
+        markers = [
+            current / 'pyproject.toml',
+            current / '.git',
+            current / 'config' / 'data.yaml',
+        ]
+
+        if any(marker.exists() for marker in markers):
+            return current
+
+        # Move to parent directory
+        parent = current.parent
+        if parent == current:  # Reached filesystem root
+            break
+        current = parent
+
+    # If not found, raise error with helpful message
+    raise FileNotFoundError(
+        "Could not find project root. Please ensure you are running from within "
+        "the alpha-excel project directory (should contain pyproject.toml or .git)"
+    )
+
+
 class ConfigLoader:
     """Load and manage field configuration for alpha-excel.
 
@@ -24,13 +74,25 @@ class ConfigLoader:
         >>>     # Apply reindex + forward-fill transformation
     """
 
-    def __init__(self, config_dir: str = 'config'):
+    def __init__(self, config_dir: Optional[str] = None):
         """Initialize ConfigLoader with configuration directory.
 
+        If config_dir is not provided or is 'config', automatically finds project root
+        and uses '<project_root>/config' directory. This allows ConfigLoader to work from
+        any subdirectory (notebooks/, scripts/, etc.) without manual path specification.
+
         Args:
-            config_dir: Path to directory containing data.yaml, settings.yaml, and operators.yaml
+            config_dir: Path to directory containing YAML config files
+                       If None or 'config' (default), auto-discovers project root
         """
-        self.config_dir = Path(config_dir)
+        if config_dir is None or config_dir == 'config':
+            # Auto-discover project root and use config/ subdirectory
+            project_root = find_project_root()
+            self.config_dir = project_root / 'config'
+        else:
+            # Use provided path as-is
+            self.config_dir = Path(config_dir)
+
         self.data_config: Dict = {}
         self.settings_config: Dict = {}
         self.operators_config: Dict = {}
