@@ -55,8 +55,9 @@ class GrossNetScaler(WeightScaler):
         norm_neg = negative.div(neg_sum_safe, axis=0)
 
         # Fill NaN with 0 (when entire row was 0)
-        norm_pos = norm_pos.fillna(0)
-        norm_neg = norm_neg.fillna(0)
+        # Call infer_objects() to avoid FutureWarning about downcasting
+        norm_pos = norm_pos.fillna(0).infer_objects(copy=False)
+        norm_neg = norm_neg.fillna(0).infer_objects(copy=False)
 
         # Apply targets
         weights = norm_pos * self.L_target - norm_neg * self.S_target
