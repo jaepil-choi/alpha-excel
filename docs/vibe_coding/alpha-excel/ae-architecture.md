@@ -4,7 +4,13 @@
 
 alpha-excel은 **Facade**, **Composite**, **Visitor** 디자인 패턴을 기반으로 설계되었습니다. 핵심은 **pandas 기반 데이터 모델**과 **자동 로딩** 메커니즘입니다.
 
-### 2.0.1. 전체 시스템 아키텍처
+**최근 업데이트 (2025-10-28)**: EvaluateVisitor를 **Single Responsibility Principle (SRP)**에 따라 리팩토링하여 4개의 전문 컴포넌트로 분리했습니다:
+- **UniverseMask**: Universe 마스킹 로직
+- **StepTracker**: Triple-cache 관리
+- **FieldLoader**: 데이터 로딩 및 변환
+- **BacktestEngine**: 포트폴리오 수익률 계산
+
+### 2.0.1. 전체 시스템 아키텍처 (SRP 리팩토링 적용)
 
 ```mermaid
 graph TB
@@ -15,12 +21,21 @@ graph TB
         CTX[(ctx: DataContext)]
     end
 
-    subgraph "Execution Layer"
-        Visitor[EvaluateVisitor]
+    subgraph "Execution Layer (SRP 적용)"
+        Visitor[EvaluateVisitor<br/>트리 순회 전담]
+
+        subgraph "Specialized Components"
+            UnivMask[UniverseMask<br/>마스킹 로직]
+            StepTracker[StepTracker<br/>캐시 관리]
+            FieldLoader[FieldLoader<br/>데이터 로딩]
+            BacktestEngine[BacktestEngine<br/>백테스트 계산]
+        end
+    end
+
+    subgraph "Triple Cache (StepTracker 관리)"
         SignalCache[Signal Cache]
         WeightCache[Weight Cache]
         PortReturnCache[Port Return Cache]
-        UnivMask[Universe Mask]
     end
 
     subgraph "Expression Tree"
@@ -42,21 +57,29 @@ graph TB
 
     User -->|initialize| RC
     User -->|evaluate| RC
-    User -->|scale_weights| RC
     RC -->|stores| CTX
     RC -->|owns| Visitor
     RC -->|delegates| Scalers
 
-    Visitor -->|applies| UnivMask
-    Visitor -->|caches| SignalCache
-    Visitor -->|caches| WeightCache
-    Visitor -->|caches| PortReturnCache
+    Visitor -->|uses| UnivMask
+    Visitor -->|uses| StepTracker
+    Visitor -->|uses| FieldLoader
+    Visitor -->|uses| BacktestEngine
     Visitor -->|traverses| ExprTree
+
+    StepTracker -->|manages| SignalCache
+    StepTracker -->|manages| WeightCache
+    StepTracker -->|manages| PortReturnCache
+
+    FieldLoader -->|loads from| DataSource
+    FieldLoader -->|caches in| CTX
+
+    UnivMask -->|applies masking|Visitor
+    BacktestEngine -->|uses| UnivMask
 
     ExprTree -->|contains| Field
     ExprTree -->|contains| Operators
 
-    Visitor -->|auto-loads from| DataSource
     DataSource -->|reads| Config
     DataSource -->|queries| Parquet
 
@@ -64,29 +87,35 @@ graph TB
     Operators -->|compute| Operators
 ```
 
-### 2.0.2. 데이터 흐름 아키텍처
+### 2.0.2. 데이터 흐름 아키텍처 (SRP 적용)
 
 ```mermaid
 flowchart LR
-    A[Expression Tree] -->|evaluate| B[Visitor]
+    A[Expression Tree] -->|evaluate| B[Visitor<br/>트리 순회]
+
     B -->|visit Field| C{Is cached?}
-    C -->|No| D[DataSource]
+    C -->|No| FL[FieldLoader]
     C -->|Yes| E[DataContext]
-    D -->|load_field| F[Parquet Files]
-    F -->|DataFrame| G[INPUT MASK]
-    G -->|masked data| E
+
+    FL -->|load_field| DS[DataSource]
+    DS -->|DataFrame| FL
+    FL -->|apply transform| FL
+    FL -->|reindex| FL
+    FL -->|INPUT MASK| UM1[UniverseMask]
+    UM1 -->|masked data| E
+    FL -->|cache| E
     E -->|cached data| B
 
-    B -->|visit Operator| H[compute]
-    H -->|result| I[OUTPUT MASK]
-    I -->|masked result| J[Cache]
+    B -->|visit Operator| H[Operator.compute]
+    H -->|result| UM2[UniverseMask<br/>OUTPUT MASK]
+    UM2 -->|masked result| ST[StepTracker]
 
-    J -->|Signal| SignalCache
-    J -->|Weight| WeightCache
-    J -->|PortReturn| PortReturnCache
+    ST -->|record_signal| SignalCache
+    ST -->|record_weights| WeightCache
+    ST -->|record_port_return| PortReturnCache
 
-    K[Universe Mask] -.->|Applied at| G
-    K -.->|Applied at| I
+    ST -->|if scaler provided| BE[BacktestEngine]
+    BE -->|compute returns| ST
 ```
 
 ---
@@ -140,42 +169,184 @@ signal = Rank(ma5)
 
 ---
 
-### C. `Visitor` 패턴: 순회 및 평가
+### C. `Visitor` 패턴: 순회 및 평가 (SRP 리팩토링 적용)
 
-**역할:** `Expression` 트리(트리)를 "방문(visit)"하여 **데이터 흐름 및 평가 로직**을 처리합니다.
+**역할:** `Expression` 트리를 "방문(visit)"하여 **트리 순회**에만 집중합니다. 다른 책임은 전문 컴포넌트에 위임합니다.
 
-**`EvaluateVisitor`:** `rc` 인스턴스(`rc._evaluator`)가 소유하며, `Expression` 트리를 순회하며 다음을 처리합니다:
+**`EvaluateVisitor`:** `rc` 인스턴스(`rc._evaluator`)가 소유하며, **Single Responsibility Principle**에 따라 다음만 처리합니다:
 
-1. **트리 순회(Traversal):** Depth-first로 모든 노드를 차례로 방문
-2. **자동 로딩(Auto-loading):** Field 노드 방문 시 DataSource에서 데이터 로딩
-3. **계산 위임(Delegation):** 각 연산의 `compute()` 메서드를 호출하여 실제 계산 수행
-4. **Universe 적용(Universe Application):** 입력 시와 출력 시 universe mask 자동 적용
-5. **상태 수집(State Collection):** 중간 결과를 캐시에 저장하여 추적 가능
+1. **트리 순회(Traversal):** Depth-first로 모든 노드를 차례로 방문 (핵심 책임)
+2. **계산 위임(Delegation):** 각 연산의 `compute()` 메서드를 호출하여 실제 계산 수행
 
-**방문 메서드:**
-- `visit_field()`: Field 노드 처리 (자동 로딩 + INPUT MASKING)
-- `visit_operator()`: 연산자 노드 처리 (계산 + 캐싱 + OUTPUT MASKING)
-- `visit_constant()`: Constant 노드 처리 (상수 DataFrame 생성)
+**위임된 책임 (Specialized Components):**
+- **UniverseMask**: 입력/출력 universe masking
+- **StepTracker**: Signal, weight, port_return 캐시 관리
+- **FieldLoader**: 데이터 자동 로딩 및 변환
+- **BacktestEngine**: 포트폴리오 수익률 계산
 
-**자동 로딩 메커니즘:**
+**방문 메서드 (간소화됨):**
+- `visit_field()`: FieldLoader에 로딩 위임, UniverseMask로 마스킹, StepTracker에 캐싱
+- `visit_operator()`: 계산 수행, UniverseMask로 마스킹, StepTracker에 캐싱
+- `visit_constant()`: Constant DataFrame 생성
+
+**리팩토링 후 visit_field (위임 패턴):**
 ```python
 def visit_field(self, field: Field) -> pd.DataFrame:
-    # 1. 캐시 확인
-    if field.name in self.ctx:
-        data = self.ctx[field.name]
-    else:
-        # 2. DataSource에서 로딩
-        data = self._data_source.load_field(
-            field.name,
-            self.start_date,
-            self.end_date
-        )
-        # 3. INPUT MASKING
-        data = data.where(self._universe_mask, np.nan)
-        # 4. 캐시에 저장
-        self.ctx[field.name] = data
+    # 1. FieldLoader에 로딩 위임
+    data = self._field_loader.load_field(field.name)
+
+    # 2. UniverseMask에 INPUT MASKING 위임
+    data = self._universe_mask.apply_input_mask(data)
+
+    # 3. StepTracker에 캐싱 위임
+    self._step_tracker.record_signal(f"Field_{field.name}", data)
+    self._step_tracker.increment_step()
 
     return data
+```
+
+---
+
+### C-1. Specialized Components (SRP 적용)
+
+**리팩토링 배경:** EvaluateVisitor가 6개 이상의 책임을 가지고 있어 SRP 위반 → 전문 컴포넌트로 분리
+
+#### 1. UniverseMask (`core/universe_mask.py`)
+
+**단일 책임:** Universe 마스킹 로직의 중앙화
+
+**주요 메서드:**
+- `apply_input_mask(data)`: INPUT MASKING (데이터 진입 시)
+- `apply_output_mask(data)`: OUTPUT MASKING (연산 결과 시)
+
+**특징:**
+- 멱등성 보장: 중복 마스킹 안전
+- Boolean DataFrame 기반
+- `data.where(mask, np.nan)` 패턴 통합
+
+```python
+class UniverseMask:
+    def __init__(self, mask: pd.DataFrame):
+        self._mask = mask  # Boolean DataFrame (T, N)
+
+    def apply_input_mask(self, data: pd.DataFrame) -> pd.DataFrame:
+        """데이터 진입 시 마스킹"""
+        return data.where(self._mask, np.nan)
+
+    def apply_output_mask(self, data: pd.DataFrame) -> pd.DataFrame:
+        """연산 결과 마스킹"""
+        return data.where(self._mask, np.nan)
+```
+
+---
+
+#### 2. StepTracker (`core/step_tracker.py`)
+
+**단일 책임:** Triple-cache 아키텍처 관리
+
+**주요 메서드:**
+- `record_signal(name, signal)`: Signal 캐시 저장
+- `record_weights(name, weights)`: Weight 캐시 저장
+- `record_port_return(name, port_return)`: Portfolio return 캐시 저장
+- `reset_signal_cache()`: Signal 캐시 초기화 (새 평가 시)
+- `reset_weight_caches()`: Weight/return 캐시만 초기화 (scaler 변경 시)
+- `get_signal(step)`, `get_weights(step)`, `get_port_return(step)`: 캐시 조회
+
+**특징:**
+- 캐시 계층 분리: Signal (영속적) vs Weight/Return (갱신 가능)
+- Step counter 관리
+- 타입 안전성: `Dict[int, Tuple[str, pd.DataFrame]]`
+
+```python
+class StepTracker:
+    def __init__(self):
+        self._signal_cache: Dict[int, Tuple[str, pd.DataFrame]] = {}
+        self._weight_cache: Dict[int, Tuple[str, Optional[pd.DataFrame]]] = {}
+        self._port_return_cache: Dict[int, Tuple[str, Optional[pd.DataFrame]]] = {}
+        self._step_counter: int = 0
+
+    def record_signal(self, name: str, signal: pd.DataFrame):
+        self._signal_cache[self._step_counter] = (name, signal)
+
+    def increment_step(self):
+        self._step_counter += 1
+```
+
+---
+
+#### 3. FieldLoader (`core/field_loader.py`)
+
+**단일 책임:** 데이터 로딩 및 변환
+
+**주요 메서드:**
+- `load_field(field_name, data_type)`: 필드 로딩 (캐싱 포함)
+- `set_universe_shape(dates, assets)`: Universe 차원 설정
+- `set_date_range(start, end, buffer_start)`: 날짜 범위 설정
+- `_apply_forward_fill(data)`: 저빈도 데이터 forward-fill
+- `_reindex_to_universe(data)`: Universe 형태로 reindex
+
+**특징:**
+- 캐시 확인 → 로딩 → 변환 → reindex → 캐싱 워크플로우
+- Forward-fill 변환 지원 (월간 데이터 → 일간)
+- DataContext 통합
+
+```python
+class FieldLoader:
+    def load_field(self, field_name: str, data_type: Optional[str] = None) -> pd.DataFrame:
+        # 1. 캐시 확인
+        if field_name in self._ctx:
+            return self._ctx[field_name]
+
+        # 2. DataSource에서 로딩
+        result = self._data_source.load_field(field_name, ...)
+
+        # 3. Forward-fill 적용 (필요시)
+        if field_config.get('forward_fill'):
+            result = self._apply_forward_fill(result)
+
+        # 4. Buffer 제거
+        result = result.loc[self._start_date:]
+
+        # 5. Reindex to universe
+        result = self._reindex_to_universe(result)
+
+        # 6. 캐싱
+        self._ctx[field_name] = result
+        return result
+```
+
+---
+
+#### 4. BacktestEngine (`core/backtest_engine.py`)
+
+**단일 책임:** 포트폴리오 수익률 계산
+
+**주요 메서드:**
+- `compute_portfolio_returns(weights)`: Position-level returns 계산
+- `compute_daily_pnl(port_return)`: Daily PnL 집계
+- `compute_metrics(port_return)`: 성과 지표 계산 (Sharpe, drawdown 등)
+
+**특징:**
+- Shift-mask 워크플로우 구현
+- UniverseMask 통합
+- 완전 벡터화
+
+```python
+class BacktestEngine:
+    def compute_portfolio_returns(self, weights: pd.DataFrame) -> pd.DataFrame:
+        # 1. Shift: 다음날 포지션
+        weights_shifted = weights.shift(1)
+
+        # 2. Re-mask: Universe 변화 대응
+        final_weights = self._universe_mask.apply_output_mask(weights_shifted)
+
+        # 3. Mask returns
+        returns_masked = self._universe_mask.apply_output_mask(self._returns_data)
+
+        # 4. Element-wise multiply (T, N shape 유지)
+        port_return = final_weights * returns_masked
+
+        return port_return
 ```
 
 ---
