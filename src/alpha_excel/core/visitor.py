@@ -255,19 +255,29 @@ class EvaluateVisitor:
         # GENERIC GROUP_BY HANDLING
         group_labels = None
         if hasattr(node, 'group_by') and node.group_by is not None:
-            # Auto-load group_by field if not in context
-            if node.group_by not in self._ctx:
-                if self._field_loader is None:
-                    raise ValueError(
-                        f"group_by field '{node.group_by}' not found in context and no DataSource available"
-                    )
-                # Load the field using FieldLoader
-                group_data = self._field_loader.load_field(node.group_by)
+            # Check if group_by is an Expression (for pure composition) or string (for lookup)
+            if isinstance(node.group_by, str):
+                # String case: Auto-load group_by field if not in context
+                if node.group_by not in self._ctx:
+                    if self._field_loader is None:
+                        raise ValueError(
+                            f"group_by field '{node.group_by}' not found in context and no DataSource available"
+                        )
+                    # Load the field using FieldLoader
+                    group_data = self._field_loader.load_field(node.group_by)
+                else:
+                    group_data = self._ctx[node.group_by]
 
+                group_labels = group_data
             else:
-                group_data = self._ctx[node.group_by]
-
-            group_labels = group_data
+                # Expression case: Evaluate the expression to get group labels
+                from alpha_excel.core.expression import Expression
+                if isinstance(node.group_by, Expression):
+                    group_labels = node.group_by.accept(self)
+                else:
+                    raise TypeError(
+                        f"group_by must be either str or Expression, got {type(node.group_by)}"
+                    )
 
         # TRAVERSAL: Evaluate child/children expressions
         if hasattr(node, 'operands'):

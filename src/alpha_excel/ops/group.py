@@ -17,6 +17,7 @@ Example:
 """
 
 from dataclasses import dataclass
+from typing import Union
 import pandas as pd
 import numpy as np
 from alpha_excel.core.expression import Expression
@@ -48,7 +49,7 @@ class GroupMax(Expression):
         - All members of a group receive the same max value
     """
     child: Expression
-    group_by: str  # Field name in dataset
+    group_by: Union[str, Expression]  # Field name or Expression for group labels
 
     def accept(self, visitor):
         return visitor.visit_operator(self)
@@ -113,7 +114,7 @@ class GroupMin(Expression):
         - All members of a group receive the same min value
     """
     child: Expression
-    group_by: str  # Field name in dataset
+    group_by: Union[str, Expression]  # Field name or Expression for group labels
 
     def accept(self, visitor):
         return visitor.visit_operator(self)
@@ -180,7 +181,7 @@ class GroupSum(Expression):
         - Useful for calculating peer metrics (sum - self = peer total)
     """
     child: Expression
-    group_by: str  # Field name in dataset
+    group_by: Union[str, Expression]  # Field name or Expression for group labels
 
     def accept(self, visitor):
         return visitor.visit_operator(self)
@@ -248,7 +249,7 @@ class GroupCount(Expression):
         - All members of a group receive the same count value
         - No child Expression needed (only counts group membership)
     """
-    group_by: str  # Field name in dataset
+    group_by: Union[str, Expression]  # Field name or Expression for group labels
 
     def accept(self, visitor):
         return visitor.visit_operator(self)
@@ -302,7 +303,7 @@ class GroupNeutralize(Expression):
         >>> expr = GroupNeutralize(Field('returns'), group_by='sector')
     """
     child: Expression
-    group_by: str
+    group_by: Union[str, Expression]  # Field name or Expression for group labels
 
     def accept(self, visitor):
         return visitor.visit_operator(self)
@@ -368,7 +369,7 @@ class GroupRank(Expression):
         >>> expr = GroupRank(Field('returns'), group_by='sector')
     """
     child: Expression
-    group_by: str
+    group_by: Union[str, Expression]  # Field name or Expression for group labels
 
     def accept(self, visitor):
         return visitor.visit_operator(self)
@@ -497,7 +498,7 @@ class GroupScalePositive(Expression):
         - Output sums to exactly 1.0 within each group (subject to floating-point precision)
     """
     child: Expression
-    group_by: str  # Field name in dataset with group labels
+    group_by: Union[str, Expression]  # Field name or Expression for group labels
 
     def accept(self, visitor):
         return visitor.visit_operator(self)
