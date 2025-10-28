@@ -21,6 +21,11 @@
 | **Arithmetic Operators** | ✅ DONE | `ops/arithmetic.py` | Add, Subtract, Multiply, Divide, Negate, Abs |
 | **Logical Operators** | ✅ DONE | `ops/logical.py` | Comparisons, And, Or, Not, IsNan |
 | **Time-Series Operators** | ✅ CORE DONE | `ops/timeseries.py` | Rolling, shift, stats (15 ops implemented) |
+| **Group Operators** | ✅ DONE | `ops/group.py` | GroupNeutralize, GroupRank, GroupMax, etc. |
+| **LabelQuantile** | ✅ DONE | `ops/crosssection.py` | Quantile labeling for Fama-French factors |
+| **MapValues** | ✅ DONE | `ops/transformation.py` | Element-wise value mapping (categorical→numeric) |
+| **CompositeGroup** | ✅ DONE | `ops/transformation.py` | Multi-dimensional group merging (2×3 sorts) |
+| **GroupScalePositive** | ✅ DONE | `ops/group.py` | Value-weighting within groups (portfolio weighting) |
 
 ### ✅ **검증 완료**
 
@@ -62,8 +67,9 @@ alpha-canvas/
 │       ├── ops/                # 연산자
 │       │   ├── __init__.py
 │       │   ├── timeseries.py   # TsMean, TsStd, etc.
-│       │   ├── crosssection.py # Rank, Demean, etc.
+│       │   ├── crosssection.py # Rank, LabelQuantile, etc.
 │       │   ├── group.py        # GroupNeutralize, GroupRank, etc.
+│       │   ├── transformation.py # MapValues, etc.
 │       │   ├── arithmetic.py   # Add, Subtract, Multiply, Divide, etc.
 │       │   ├── logical.py      # And, Or, Not, Equals, etc.
 │       │   └── constants.py    # Constant value operator
