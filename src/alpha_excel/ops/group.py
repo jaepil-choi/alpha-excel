@@ -397,3 +397,169 @@ class GroupRank(Expression):
             result.loc[idx] = ranked['value'].values
 
         return result
+
+
+@dataclass(eq=False)
+class GroupScalePositive(Expression):
+    """Scale positive values to sum to 1 within each group (value-weighting).
+
+    Normalizes positive values within each group so that the sum equals 1.
+    Essential for creating value-weighted portfolios where weights are proportional
+    to market capitalization or other positive measures.
+
+    Args:
+        child: Expression producing positive values (e.g., market cap)
+        group_by: Field name containing group labels (e.g., 'composite_groups')
+
+    Returns:
+        DataFrame where each value is scaled by its group sum: value / sum(group).
+        Each group independently sums to 1.
+
+    Behavior:
+        - Validates that all non-NaN values are non-negative (raises ValueError otherwise)
+        - For each group: value_i / sum(all values in group)
+        - NaN values pass through as NaN
+        - If group sum is zero: all members get NaN
+        - Cross-sectional operation (applied independently per time period)
+
+    Example - Value-Weighted Fama-French:
+        >>> # Value-weight within composite size×value portfolios
+        >>> value_weights = rc.evaluate(GroupScalePositive(
+        ...     Field('market_cap'),
+        ...     group_by='composite_groups'
+        ... ))
+        >>> # Each of 6 portfolios has weights summing to 1
+
+    Example - Equal-Weighted Portfolios:
+        >>> # Equal-weight: use Constant(1) as input
+        >>> equal_weights = rc.evaluate(GroupScalePositive(
+        ...     Constant(1),
+        ...     group_by='composite_groups'
+        ... ))
+        >>> # Each stock in portfolio gets 1/n_stocks_in_portfolio
+
+    Fama-French Complete Example:
+        ```python
+        # Step 1: Create composite groups
+        size_labels = rc.evaluate(LabelQuantile(Field('market_cap'), bins=2, labels=['Small', 'Big']))
+        value_labels = rc.evaluate(LabelQuantile(Field('book_to_market'), bins=3, labels=['Low', 'Med', 'High']))
+        rc.data['size_groups'] = size_labels
+        rc.data['value_groups'] = value_labels
+
+        composite = rc.evaluate(CompositeGroup(Field('size_groups'), Field('value_groups')))
+        rc.data['composite_groups'] = composite
+
+        # Step 2: Assign directional signals (±1/3 for SMB factor)
+        smb_signals = rc.evaluate(MapValues(
+            Field('composite_groups'),
+            mapping={
+                'Small&Low': 1/3, 'Small&Med': 1/3, 'Small&High': 1/3,
+                'Big&Low': -1/3, 'Big&Med': -1/3, 'Big&High': -1/3
+            }
+        ))
+        rc.data['smb_signals'] = smb_signals
+
+        # Step 3: Value-weight within portfolios
+        value_weights = rc.evaluate(GroupScalePositive(
+            Field('market_cap'),
+            group_by='composite_groups'
+        ))
+
+        # Step 4: Combine signals with value weights
+        smb_weights = rc.evaluate(Multiply(Field('smb_signals'), value_weights))
+        # Result: (±1/3) * (mcap_i / sum_mcap_in_portfolio)
+        # Each portfolio sums to ±1/3, total long = 1, total short = -1
+        ```
+
+    Math Verification (SMB Example):
+        - Small&Low portfolio: 3 stocks with mcap [100, 200, 300], sum = 600
+        - After GroupScalePositive: [100/600, 200/600, 300/600] = [0.167, 0.333, 0.500]
+        - Portfolio weights sum: 0.167 + 0.333 + 0.500 = 1.0 ✓
+        - After multiplying by signal (1/3): [0.056, 0.111, 0.167]
+        - Small&Low contribution: 0.056 + 0.111 + 0.167 = 0.333 = 1/3 ✓
+        - Total long (3 small portfolios): 3 × (1/3) = 1 ✓
+        - Total short (3 big portfolios): 3 × (-1/3) = -1 ✓
+
+    Use Cases:
+        1. **Fama-French Factors**: Value-weighted SMB, HML factors
+        2. **Market Cap Weighting**: Within any group/portfolio
+        3. **Equal Weighting**: Use Constant(1) as input
+        4. **Custom Weighting**: Any positive measure (volume, liquidity, etc.)
+
+    Validation:
+        - Raises ValueError if any non-NaN value is negative
+        - This is a strict check to prevent incorrect usage
+        - The operator name "Positive" indicates this requirement
+
+    Notes:
+        - Group sum = 0: All members of that group get NaN
+        - Preserves NaN in input positions
+        - Output sums to exactly 1.0 within each group (subject to floating-point precision)
+    """
+    child: Expression
+    group_by: str  # Field name in dataset with group labels
+
+    def accept(self, visitor):
+        return visitor.visit_operator(self)
+
+    def compute(
+        self,
+        child_result: pd.DataFrame,
+        group_labels: pd.DataFrame,
+        visitor=None
+    ) -> pd.DataFrame:
+        """Scale values to sum to 1 within each group.
+
+        Args:
+            child_result: Input data (T, N) - must be non-negative
+            group_labels: Group assignments (T, N) with categorical labels
+
+        Returns:
+            DataFrame (T, N) with values scaled: value / sum(group)
+
+        Raises:
+            ValueError: If any non-NaN value is negative
+        """
+        # Validate: all non-NaN values must be non-negative
+        non_nan_values = child_result[~child_result.isna()]
+        if (non_nan_values < 0).any().any():
+            raise ValueError(
+                "GroupScalePositive requires all non-NaN values to be non-negative. "
+                f"Found negative values: min = {non_nan_values.min().min()}"
+            )
+
+        # Convert to float dtype to avoid pandas FutureWarning
+        # when assigning scaled float values to potentially integer input
+        result = child_result.astype(float).copy()
+
+        # For each time period (row)
+        for idx in result.index:
+            row_data = child_result.loc[idx]
+            row_groups = group_labels.loc[idx]
+
+            # Create temporary DataFrame for grouping
+            temp_df = pd.DataFrame({'value': row_data, 'group': row_groups})
+
+            # Filter out rows where value OR group is NaN
+            valid_mask = temp_df['value'].notna() & temp_df['group'].notna()
+            valid_df = temp_df[valid_mask]
+
+            if len(valid_df) > 0:
+                # Group by labels and calculate group sums
+                grouped = valid_df.groupby('group')
+
+                # Scale by group sum: value / sum(group)
+                # transform('sum') broadcasts group sum to all members
+                group_sums = grouped['value'].transform('sum')
+                scaled_values = valid_df['value'] / group_sums
+
+                # Reconstruct full result with NaN preserved
+                scaled_series = pd.Series(index=temp_df.index, dtype=float)
+                scaled_series[valid_mask] = scaled_values.values
+            else:
+                # All NaN - result is all NaN
+                scaled_series = pd.Series(index=temp_df.index, dtype=float)
+
+            result.loc[idx] = scaled_series.values
+
+        return result
