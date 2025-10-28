@@ -347,6 +347,87 @@ class AlphaExcel:
         cumulative_pnl = daily_pnl.cumsum()
         return cumulative_pnl
 
+    @property
+    def num_steps(self) -> int:
+        """Get the number of evaluation steps cached.
+
+        Returns:
+            Number of steps in the cache
+
+        Example:
+            >>> result = rc.evaluate(complex_expr, scaler=DollarNeutralScaler())
+            >>> print(f"Evaluated {rc.num_steps} steps")
+            >>> for i in range(rc.num_steps):
+            ...     daily_pnl = rc.get_daily_pnl(i)
+        """
+        return self._evaluator._step_tracker.num_steps
+
+    def get_final_weights(self) -> Optional[pd.DataFrame]:
+        """Get portfolio weights for the final evaluation step.
+
+        Convenience method that automatically uses the last step.
+
+        Returns:
+            Weights DataFrame or None if no scaler was used
+
+        Example:
+            >>> result = rc.evaluate(expr, scaler=DollarNeutralScaler())
+            >>> weights = rc.get_final_weights()  # No step parameter needed!
+        """
+        if self.num_steps == 0:
+            return None
+        return self.get_weights(self.num_steps - 1)
+
+    def get_final_port_return(self) -> Optional[pd.DataFrame]:
+        """Get position-level portfolio returns for the final evaluation step.
+
+        Convenience method that automatically uses the last step.
+
+        Returns:
+            (T, N) DataFrame with position-level returns, or None
+
+        Example:
+            >>> result = rc.evaluate(expr, scaler=DollarNeutralScaler())
+            >>> port_return = rc.get_final_port_return()  # No step parameter needed!
+        """
+        if self.num_steps == 0:
+            return None
+        return self.get_port_return(self.num_steps - 1)
+
+    def get_final_daily_pnl(self) -> Optional[pd.Series]:
+        """Get daily PnL for the final evaluation step.
+
+        Convenience method that automatically uses the last step.
+
+        Returns:
+            (T,) Series with daily PnL, or None
+
+        Example:
+            >>> result = rc.evaluate(expr, scaler=DollarNeutralScaler())
+            >>> daily_pnl = rc.get_final_daily_pnl()  # No step parameter needed!
+            >>> print(f"Sharpe: {daily_pnl.mean() / daily_pnl.std() * np.sqrt(252):.2f}")
+        """
+        if self.num_steps == 0:
+            return None
+        return self.get_daily_pnl(self.num_steps - 1)
+
+    def get_final_cumulative_pnl(self) -> Optional[pd.Series]:
+        """Get cumulative PnL for the final evaluation step.
+
+        Convenience method that automatically uses the last step.
+
+        Returns:
+            (T,) Series with cumulative PnL, or None
+
+        Example:
+            >>> result = rc.evaluate(expr, scaler=DollarNeutralScaler())
+            >>> cum_pnl = rc.get_final_cumulative_pnl()  # No step parameter needed!
+            >>> final_pnl = cum_pnl.iloc[-1]
+        """
+        if self.num_steps == 0:
+            return None
+        return self.get_cumulative_pnl(self.num_steps - 1)
+
     def scale_weights(
         self,
         signal: pd.DataFrame,
