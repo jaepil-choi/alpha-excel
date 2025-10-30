@@ -1307,7 +1307,7 @@ result = o.ts_mean(data, window=5)  # No difference for users!
 
 ---
 
-### Phase 2: Concrete Operators (IN PROGRESS - 29/29 tests passing)
+### Phase 2: Concrete Operators (COMPLETE ✅)
 **Dependencies:** Phase 1.5 (base_operator)
 
 **Scope:** Phase 2 implements **representative operators only** to validate the operator infrastructure. Additional operators will be implemented after Phase 3 (Facade & Registry) is complete.
@@ -1335,34 +1335,202 @@ All operators inherit from BaseOperator and receive `(universe_mask, config_mana
    - Comparison operators (>, <, >=, <=, ==, !=) - After Phase 3 with logical operators
    - Logical operators (And, Or, Not) - After Phase 3
 
-**Status:** 165 tests total (73 Phase 1 + 63 Phase 1.5 + 29 Phase 2)
+**Status:** 165 tests passing (73 Phase 1 + 63 Phase 1.5 + 29 Phase 2), committed
 **Note:** Operators can be implemented and tested independently without facade
 
 ---
 
-### Phase 3: Facade & Registry
-**Dependencies:** Phase 2 (concrete operators)
+### Phase 3: Facade & Registry (Broken into 6 mini-phases)
 
-**Design:** AlphaExcel as dependency coordinator
+Phase 3 is large, so it's divided into 6 sequential mini-phases with clear dependencies.
 
-1. **OperatorRegistry (operator_registry.py):**
-   - Auto-discovery with `__init__(universe_mask, config_manager)`
-   - Instantiates operators: `Operator(universe_mask, config_manager, registry=None)`
-   - Sets registry reference after instantiation: `operator._registry = self`
+**Dependency Graph:**
+```
+Phase 3.1 (Scalers) ────────────┐
+                                ↓
+Phase 3.2 (ScalerManager) ──────┼──────┐
+                                │      ↓
+Phase 2 (Operators) ────────┐   │      │
+                            ↓   │      │
+Phase 3.3 (Registry) ───────┼───┘      │
+                            ↓          │
+Phase 3.4 (Facade Core) ────┼──────────┘
+                            ↓
+Phase 3.5 (Backtesting) ────┤
+                            ↓
+Phase 3.6 (Integration) ────┘
+```
 
-2. **AlphaExcel (alpha_excel.py):**
-   - Dependency coordinator role
-   - Wires components: `FieldLoader(data_source, universe_mask, config_manager)`
-   - Wires registry: `OperatorRegistry(universe_mask, config_manager)`
+---
 
-3. **ScalerManager:**
-   - Weight scaler management with params
+#### Phase 3.1: Portfolio Scalers Foundation (COMPLETE ✅)
+**Dependencies:** None (standalone)
+**Tests:** 25 tests passing
 
-4. **Backtesting methods:**
-   - to_weights(), to_portfolio_returns()
-   - to_long_returns(), to_short_returns()
+**Components Implemented:**
+1. ✅ **WeightScaler base** (`portfolio/base.py`)
+   - Abstract base for all scalers
+   - Interface: `scale(signal: AlphaData) -> AlphaData`
+   - Works with AlphaData (not raw DataFrame)
+   - 8 tests validating abstract behavior
 
-**Key Benefit:** Facade is thin coordinator layer, not tightly coupled container
+2. ✅ **Concrete Scalers** (`portfolio/scalers.py`)
+   - `GrossNetScaler(gross=1.0, net=0.0)` - Target gross/net exposure (6 tests)
+     - Split-and-scale algorithm: demean → split positive/negative → scale independently
+     - Long exposure = (gross + net) / 2, Short exposure = (gross - net) / 2
+   - `DollarNeutralScaler()` - Shorthand for GrossNetScaler(gross=2.0, net=0.0) (5 tests)
+     - Common market-neutral strategy preset
+   - `LongOnlyScaler(target_gross=1.0)` - Long-only with target exposure (6 tests)
+     - Zero out negative signals, scale positive signals
+
+**Implementation Details:**
+- All scalers use fully vectorized pandas/numpy operations (no Python loops)
+- Preserve AlphaData step history and cache inheritance
+- Return AlphaData with data_type='weight'
+- Follow Strategy Pattern for extensibility
+
+**Files:**
+- `src/alpha_excel2/portfolio/base.py`
+- `src/alpha_excel2/portfolio/scalers.py`
+- `tests/test_alpha_excel2/test_portfolio/test_weight_scaler_base.py` (8 tests)
+- `tests/test_alpha_excel2/test_portfolio/test_scalers.py` (17 tests)
+
+**Status:** Committed (b7f55dd)
+
+---
+
+#### Phase 3.2: ScalerManager (COMPLETE ✅)
+**Dependencies:** Phase 3.1 (WeightScaler)
+**Tests:** 15 tests passing
+
+**Components Implemented:**
+1. ✅ **ScalerManager** (`portfolio/scaler_manager.py`)
+   - Registry of built-in scalers: 'GrossNet', 'DollarNeutral', 'LongOnly'
+   - `set_scaler(scaler_class_or_name, **params)` - Set active scaler with runtime params
+   - `get_active_scaler()` - Retrieve current scaler instance
+   - `list_scalers()` - Show available scalers
+   - Supports setting by class or string name with clear error messages
+
+**Implementation Details:**
+- Accepts both class references and string names
+- Instantiates scalers with runtime parameters
+- Maintains single active scaler instance
+- Ready for integration with AlphaExcel facade (Phase 3.4)
+
+**Tests Breakdown:**
+- Initialization and registry population (3 tests)
+- Setting scalers by class/name with parameters (5 tests)
+- Getting active scaler instance (4 tests)
+- Integration workflows: set → get → apply (3 tests)
+
+**Files:**
+- `src/alpha_excel2/portfolio/scaler_manager.py`
+- `tests/test_alpha_excel2/test_portfolio/test_scaler_manager.py` (15 tests)
+
+**Status:** Committed (8e54bd3)
+
+---
+
+#### Phase 3.3: OperatorRegistry
+**Dependencies:** Phase 2 operators (TsMean, Rank, GroupRank - already exist)
+**Estimated Tests:** ~20 tests
+
+**Components:**
+1. **OperatorRegistry** (`core/operator_registry.py`)
+   - Auto-discovery of BaseOperator subclasses
+   - CamelCase → snake_case conversion (TsMean → ts_mean)
+   - Instantiate operators: `Operator(universe_mask, config_manager, registry=None)`
+   - Set registry reference: `operator._registry = self`
+   - Method dispatch via `__getattr__` for `o.ts_mean()` syntax
+   - `list_operators()` - List all available operators
+
+**Files:**
+- `src/alpha_excel2/core/operator_registry.py`
+- `tests/test_alpha_excel2/test_core/test_operator_registry.py`
+
+---
+
+#### Phase 3.4: AlphaExcel Facade (Core)
+**Dependencies:** Phase 3.3 (OperatorRegistry), Phase 1-2 (core components)
+**Estimated Tests:** ~20 tests
+
+**Components:**
+1. **AlphaExcel Facade** (`core/facade.py`)
+   - Dependency coordinator initialization order:
+     1. Timestamps (start_time, end_time)
+     2. ConfigManager (FIRST - others depend on it)
+     3. DataSource
+     4. UniverseMask
+     5. FieldLoader (inject: data_source, universe_mask, config_manager)
+     6. OperatorRegistry (inject: universe_mask, config_manager)
+   - Property accessors:
+     - `ae.field` → FieldLoader.load
+     - `ae.ops` → OperatorRegistry
+   - **NO backtesting methods yet** (Phase 3.5)
+
+**Files:**
+- `src/alpha_excel2/core/facade.py`
+- `tests/test_alpha_excel2/test_core/test_facade.py`
+
+---
+
+#### Phase 3.5: Backtesting Methods
+**Dependencies:** Phase 3.2 (ScalerManager), Phase 3.4 (Facade core)
+**Estimated Tests:** ~25 tests
+
+**Components:**
+1. **Extend AlphaExcel Facade** (`core/facade.py`)
+   - Add ScalerManager to initialization
+   - `set_scaler(scaler, **params)` - Delegate to ScalerManager
+   - `to_weights(signal: AlphaData) -> AlphaData` - Apply scaler, return type='weight'
+   - `to_portfolio_returns(weights: AlphaData) -> AlphaData`
+     - Load returns, shift weights, apply masks, multiply
+     - Return type='port_return'
+   - `to_long_returns(weights: AlphaData) -> AlphaData` - Filter weights > 0
+   - `to_short_returns(weights: AlphaData) -> AlphaData` - Filter weights < 0
+
+**Files:**
+- `src/alpha_excel2/core/facade.py` (extend)
+- `tests/test_alpha_excel2/test_core/test_backtesting.py`
+
+---
+
+#### Phase 3.6: Integration & Validation
+**Dependencies:** All previous Phase 3 mini-phases
+**Estimated Tests:** ~20 integration tests
+
+**Components:**
+1. **End-to-End Integration Tests** (`tests/test_alpha_excel2/test_phase3_integration.py`)
+   - Complete workflow: init → field → operators → scaler → backtesting
+   - Multi-operator chains with cache inheritance
+   - Different scaler strategies
+   - Performance validation
+
+2. **Showcase Migration** (`showcase/`)
+   - Update existing showcases to v2.0 API
+   - Create new showcases demonstrating v2.0 features
+   - Update `showcase/README.md`
+
+3. **Documentation Updates**
+   - Update this architecture doc with implementation notes
+   - Document deviations from plan (if any)
+   - Update CLAUDE.md with Phase 3 completion status
+
+**Files:**
+- `tests/test_alpha_excel2/test_phase3_integration.py`
+- `showcase/*.py` (updated)
+- `docs/vibe_coding/alpha-excel/ae2-architecture.md` (this file)
+- `CLAUDE.md`
+
+---
+
+**Phase 3 Summary:**
+- **Total Estimated Tests:** ~125 new tests
+- **Current Status:** Phase 3.1 ✅ (25 tests), Phase 3.2 ✅ (15 tests) - 40 tests passing
+- **Total Tests After Phase 3.1+3.2:** 205 tests (165 Phase 1+1.5+2 + 40 Phase 3.1+3.2)
+- **Remaining:** Phase 3.3-3.6 (~85 estimated tests)
+- **Implementation Order:** 3.1 ✅ → 3.2 ✅ → 3.3 → 3.4 → 3.5 → 3.6 (sequential)
+- **Key Benefit:** Facade is thin coordinator layer, not tightly coupled container
 
 ---
 
