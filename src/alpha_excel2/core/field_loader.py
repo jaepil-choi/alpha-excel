@@ -60,10 +60,15 @@ class FieldLoader:
         Pipeline:
             1. Check cache
             2. Load from DataSource + get field config
-            3. Apply forward-fill (from preprocessing.yaml)
-            4. Convert to category (if group type)
-            5. Apply OUTPUT MASK
+            3. Convert to category (if group type)
+            4. Apply OUTPUT MASK (reindex to universe)
+            5. Apply forward-fill (AFTER reindexing, from preprocessing.yaml)
             6. Construct AlphaData(step=0, cached=True)
+
+        Note:
+            Forward-fill is applied AFTER reindexing so that monthly data
+            (which has sparse dates) gets properly filled to daily frequency
+            after being aligned to the universe's daily index.
 
         Args:
             name: Field name to load
@@ -97,22 +102,24 @@ class FieldLoader:
             raise ValueError(f"Field '{name}' not found in data.yaml")
 
         data_df = self._ds.load_field(name, start_time, end_time)
-
-        # Step 3: Apply forward-fill (from preprocessing.yaml)
         data_type = field_config.get('data_type', 'numeric')
-        preprocessing_config = self._config_manager.get_preprocessing_config(data_type)
 
-        if preprocessing_config.get('forward_fill', False):
-            data_df = data_df.ffill()
-
-        # Step 4: Convert to category (if group type)
+        # Step 3: Convert to category (if group type)
+        # Do this BEFORE reindexing to preserve categorical information
         if data_type == 'group':
             # Convert all columns to category dtype
             for col in data_df.columns:
                 data_df[col] = data_df[col].astype('category')
 
-        # Step 5: Apply OUTPUT MASK
+        # Step 4: Apply OUTPUT MASK (reindex to universe)
         data_df = self._universe_mask.apply_mask(data_df)
+
+        # Step 5: Apply forward-fill (AFTER reindexing)
+        # This is critical for group data: monthly data gets reindexed to daily,
+        # introducing NaN for days between months. Forward-fill propagates values.
+        preprocessing_config = self._config_manager.get_preprocessing_config(data_type)
+        if preprocessing_config.get('forward_fill', False):
+            data_df = data_df.ffill()
 
         # Step 6: Construct AlphaData(step=0, cached=True)
         alpha_data = AlphaData(
