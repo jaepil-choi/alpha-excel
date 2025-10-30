@@ -2,19 +2,34 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Development Environment
+
+**Operating System**: Windows with PowerShell
+**Python Environment**: Poetry virtual environment
+
+**Important**: All commands should use PowerShell syntax and poetry run prefix:
+```powershell
+# Use PowerShell commands
+dir          # Not ls
+type         # Not cat
+poetry run python script.py   # Always use poetry run
+```
+
 ## Project Overview
 
 **alpha-excel** is a pandas-based quantitative finance research framework for building and backtesting factor-based trading strategies. The project follows **Experiment-Driven Development** (see `.cursor/rules/experiment-driven-development.mdc`).
 
+**Current Status**: Migrating from v1.0 to v2.0 (see `docs/vibe_coding/alpha-excel/ae2-*.md`)
+
 **Main packages**:
-- **alpha-excel**: pandas-based factor research engine (primary implementation)
+- **alpha-excel v2.0**: pandas-based factor research engine with eager execution (IN DEVELOPMENT)
 - **alpha-database**: Config-driven data retrieval from Parquet files (reads `config/data.yaml`)
 - **alpha-lab**: (Placeholder/minimal implementation)
 
 **Supporting directories**:
 - **scripts/**: Temporary ETL scripts for data preparation (not alpha-database's responsibility)
 
-**Note**: `alpha-canvas` (xarray-based) is deprecated and will be removed soon. All new development should use alpha-excel.
+**Note**: `alpha-canvas` (xarray-based) is deprecated and will be removed soon. All new development uses alpha-excel v2.0.
 
 ## Development Commands
 
@@ -61,40 +76,51 @@ poetry run python showcase/run_all.py
 poetry run python experiments/exp_01_descriptive_name.py
 ```
 
-## Architecture Overview
+## Architecture Overview (v2.0)
 
-### Design Patterns
+### Core Design Principles
 
-The codebase uses four core design patterns:
+**v2.0 represents a fundamental architecture shift from v1.0:**
 
-1. **Facade Pattern**: `AlphaExcel` provides a unified interface to the system
-2. **Composite Pattern**: Expression trees represent data transformations
-3. **Visitor Pattern**: `EvaluateVisitor` traverses and evaluates expression trees
-4. **Strategy Pattern**: `WeightScaler` implementations for portfolio construction
+1. **Eager Execution** (NOT Lazy): Operations execute immediately, no Visitor pattern
+2. **Stateful Data Model** (AlphaData): Data + history + cache in one object
+3. **Stateless Operators** (BaseOperator): Pure computation functions
+4. **Method-Based API** (`o.ts_mean()`): No imports needed, IDE autocomplete
+5. **On-Demand Caching** (`record_output=True`): User controls memory usage
+6. **Type-Aware System**: numeric, group, weight, port_return, mask types
+7. **Config-Driven Design**: 4 YAML files control behavior
+8. **Finer-Grained Dependency Injection**: Components receive only what they need
 
 ### Key Architectural Concepts
 
-**Expression Trees (Composite Pattern)**
-- All operations are Expression nodes forming tree structures
-- **Leaf nodes**: `Field('returns')` - references to data fields
-- **Composite nodes**: `TsMean(Field('returns'), window=5)` - operations with children
-- Expressions are lazy - they define computation graphs, not execute them
+**Eager Execution (v2.0 Change)**
+- **v1.0 (Lazy)**: Build expression tree → evaluate later via `ae.evaluate(expr)`
+- **v2.0 (Eager)**: Each operation executes immediately when called
+- **Benefit**: Immediate results, better debugging, 10x performance improvement
 
-**Visitor Pattern for Evaluation**
-- `EvaluateVisitor` traverses expression trees depth-first
-- Separates tree traversal logic from operator computation logic
-- Each operator implements `compute()` for its core calculation
-- Visitor handles: tree traversal, auto-loading data, caching, universe masking
+**Stateful AlphaData (v2.0)**
+- `_data`: pd.DataFrame (T, N)
+- `_step_counter`: Number of operations applied
+- `_step_history`: List of operations (expression reconstruction)
+- `_data_type`: 'numeric', 'group', 'weight', 'port_return', 'mask'
+- `_cached`: Whether this step's data is cached
+- `_cache`: List[CachedStep] - inherited upstream caches
 
-**Triple-Cache Architecture**
-- **Signal cache**: Stores raw signal values (persistent across scaler changes)
-- **Weight cache**: Stores portfolio weights (recomputed when scaler changes)
-- **Portfolio return cache**: Stores position-level returns for attribution analysis
+**Cache Inheritance (v2.0 Feature)**
+- Use `record_output=True` to cache specific operation results
+- Downstream operations automatically inherit upstream caches
+- Access cached data via `get_cached_step(step_id)` from any downstream AlphaData
+- Enables debugging without storing all intermediate results in variables
 
-**Double-Masking Strategy**
-- **INPUT MASKING**: Applied when data enters system (Field retrieval from DataSource)
-- **OUTPUT MASKING**: Applied to operator computation results
-- Ensures all data respects investable universe constraint
+**Type-Aware System (v2.0)**
+- Each AlphaData has `_data_type`: 'numeric', 'group', 'weight', etc.
+- Operators validate input types via `input_types` attribute
+- Config-driven preprocessing (forward-fill rules per type)
+- Type propagation through operations
+
+**Single Output Masking (v2.0 Simplification)**
+- OUTPUT MASKING only (applied after Field loading and Operator computation)
+- No INPUT MASKING needed (all inputs already masked from upstream)
 - Idempotent: masking already-masked data is safe
 
 ### Data Pipeline Architecture
@@ -131,76 +157,55 @@ The codebase uses four core design patterns:
 └─────────────────────────────────────────────────────────────┘
 ```
 
-### Data Flow in alpha-excel
+### Data Flow in alpha-excel v2.0
 
 ```
-config/data.yaml → DataSource.load_field() → pd.DataFrame (T, N)
-                                                    ↓
-                                          INPUT MASK applied
-                                                    ↓
-                                      DataContext cache (dict)
-                                                    ↓
-Expression Tree → Visitor traversal → operator.compute() → OUTPUT MASK → Result
-                                                    ↓
-                            Triple-Cache (signal, weight, port_return)
+config/data.yaml → FieldLoader → DataSource.load_field() → pd.DataFrame (T, N)
+                                                                  ↓
+                                                    Type-based preprocessing (preprocessing.yaml)
+                                                                  ↓
+                                                         OUTPUT MASK applied
+                                                                  ↓
+                                                         AlphaData(step=0, cached=True)
+                                                                  ↓
+User calls operator → BaseOperator.__call__() → compute() → OUTPUT MASK → AlphaData(step=n)
+                                                                  ↓
+                                                         Cache inheritance (if upstream cached)
 ```
 
-### Key Improvements Over alpha-canvas (deprecated)
+**Key Differences from v1.0:**
+- No Visitor pattern (eager execution)
+- No triple-cache (on-demand caching)
+- Single OUTPUT masking (no INPUT masking)
+- Type-aware preprocessing
+- Cache inheritance instead of automatic caching
 
-- ✅ **pandas instead of xarray**: Full pandas/numpy ecosystem compatibility
-- ✅ **No `add_data()` required**: Direct data access via `rc.data['field']`
-- ✅ **Simpler API**: Pythonic, intuitive interface
-- ✅ **Same power**: Expression trees, Visitor pattern, Triple-cache, Universe masking
-- ✅ **Better debugging**: DataFrames easier to inspect than xarray
+## Package Structure (v2.0)
 
-## Package Structure
+### Main Packages
+- **`src/alpha_excel/`**: v2.0 implementation (in development)
+  - `core/`: Core components (AlphaData, BaseOperator, FieldLoader, ConfigManager, UniverseMask, etc.)
+  - `ops/`: Operator implementations (timeseries, crosssection, group)
+  - `portfolio/`: Weight scalers and scaler manager
+  - `v1/`: Deprecated v1.0 code (archived)
 
-```
-src/
-├── alpha_excel/          # pandas-based implementation (PRIMARY)
-│   ├── core/
-│   │   ├── data_model.py     # DataContext (dict of DataFrames)
-│   │   ├── expression.py     # Expression tree base classes
-│   │   ├── visitor.py        # EvaluateVisitor with triple-cache
-│   │   ├── facade.py         # AlphaExcel facade
-│   │   └── serialization.py  # Expression serialization
-│   ├── ops/
-│   │   ├── timeseries.py     # TsMean, TsMax, TsStdDev, TsDelay, etc.
-│   │   ├── crosssection.py   # Rank operator
-│   │   ├── group.py          # GroupNeutralize, GroupRank, GroupMax, GroupMin
-│   │   ├── arithmetic.py     # Add, Sub, Mul, Div, Abs, Log, etc.
-│   │   ├── logical.py        # Boolean operators (==, <, &, |, ~)
-│   │   └── constants.py      # Constant values
-│   ├── portfolio/
-│   │   ├── base.py           # WeightScaler base class
-│   │   └── strategies.py     # GrossNetScaler, DollarNeutralScaler, etc.
-│   └── utils/
-│       └── accessor.py       # DataAccessor for rc.data['field']
-│
-├── alpha_database/       # Config-driven data retrieval (IN USE)
-│   ├── core/
-│   │   ├── config.py         # YAML config loader (reads config/data.yaml)
-│   │   ├── data_loader.py    # DuckDB/Parquet loader
-│   │   └── data_source.py    # DataSource facade (stateless)
-│   └── readers/
-│       ├── base.py           # BaseReader interface
-│       └── parquet.py        # ParquetReader implementation
-│
-├── alpha_canvas/         # DEPRECATED - xarray-based (will be removed)
-└── alpha_lab/            # Minimal/placeholder
+- **`src/alpha_database/`**: Config-driven data retrieval (stable)
+  - Reads `config/data.yaml` for field definitions
+  - DuckDB queries on Parquet files
+  - Returns pandas DataFrames
 
-scripts/                  # Temporary ETL scripts (data preparation)
-├── etl_dataguide.py     # Transform DataGuide Excel → Parquet
-├── etl_fnguide_returns.py  # Transform FnGuide returns → Parquet
-├── verify_dataguide_parquet.py  # Data verification
-└── eda_dataguide.py     # Exploratory data analysis
+- **`src/alpha_canvas/`**: DEPRECATED - xarray-based (will be removed)
+- **`src/alpha_lab/`**: Placeholder/minimal implementation
 
-tests/                    # Pytest tests
-experiments/              # Experiment scripts with findings
-showcase/                 # Demonstration scripts
-docs/                     # Architecture and research documentation
-config/                   # YAML configuration files (data.yaml)
-```
+### Supporting Directories
+- **`scripts/`**: Temporary ETL scripts (data preparation - not production)
+- **`tests/`**: Pytest tests (165 passing as of Phase 2)
+- **`experiments/`**: Experiment scripts (`ae2_*.py` for v2.0)
+- **`showcase/`**: Demonstration scripts (will update after Phase 3)
+- **`docs/vibe_coding/alpha-excel/`**: v2.0 PRD, Architecture, Transition Plan
+- **`config/`**: 4 YAML configuration files (data, operators, settings, preprocessing)
+
+**See `ae2-architecture.md` for detailed component structure and dependencies.**
 
 ## Data Management
 
@@ -231,25 +236,35 @@ config/                   # YAML configuration files (data.yaml)
 
 **Key principle**: alpha-database assumes data is already in clean, queryable Parquet format. It does NOT perform ETL.
 
-## Configuration Files
+## Configuration Files (v2.0 - Config-Driven Design)
 
-### Data Configuration (`config/data.yaml`)
+v2.0 uses **4 YAML files** to control system behavior without code changes:
+
+### 1. Data Configuration (`config/data.yaml`)
 
 Defines SQL queries for loading fields from Parquet files:
-```yaml
-field_name:
-  query: >
-    SELECT date, security_id, value_column
-    FROM read_parquet('data/file.parquet')
-    WHERE date >= '{start_date}' AND date <= '{end_date}'
-  time_col: date
-  asset_col: security_id
-  value_col: value_column
-```
+- Field name and data type ('numeric', 'group', 'weight', etc.)
+- DuckDB SQL query with date range placeholders `{start_date}`, `{end_date}`
+- Column mappings: `time_col`, `asset_col`, `value_col`
 
-Runtime parameters `{start_date}` and `{end_date}` are substituted when DataSource loads fields.
+**Note**: This config is read by alpha-database for data retrieval. ETL scripts produce the Parquet files.
 
-**Note**: This config is read by alpha-database, which retrieves data. ETL scripts produce the Parquet files that these queries read from.
+### 2. Preprocessing Configuration (`config/preprocessing.yaml`) ✨ NEW in v2.0
+
+Defines type-based preprocessing rules (e.g., forward-fill strategies):
+- `numeric`: No forward-fill (default)
+- `group`: Forward-fill enabled (monthly → daily expansion)
+- `weight`, `mask`: No forward-fill
+
+**Why**: Different data types need different preprocessing. Groups (industry, sector) should be forward-filled to expand monthly data to daily, but numeric data shouldn't.
+
+### 3. Operator Configuration (`config/operators.yaml`)
+
+Operator-specific settings like `min_periods_ratio` for rolling window operations.
+
+### 4. Settings Configuration (`config/settings.yaml`)
+
+System-wide settings like `buffer_days` for loading extra data to warm up rolling windows.
 
 ## Important Implementation Rules
 
@@ -304,34 +319,116 @@ Runtime parameters `{start_date}` and `{end_date}` are substituted when DataSour
 - ✅ Use partitioning for efficient queries
 - ⚠️ These are temporary - not part of production system
 
-### Universe Masking
+### Universe Masking (v2.0 - Simplified)
 
-All operators must respect universe masking:
-- INPUT MASKING: Applied in `visit_field()` when auto-loading data
-- OUTPUT MASKING: Applied in `visit_operator()` to computation results
+**Single OUTPUT Masking Strategy:**
+- OUTPUT MASKING: Applied after Field loading and Operator computation
+- NO INPUT MASKING: All inputs are already masked from upstream
 - Universe mask is immutable after AlphaExcel initialization
-- Use `data.where(universe_mask, np.nan)` for masking in pandas
+- Use `data.where(universe_mask._data, np.nan)` for masking in pandas
 
-### Operator Implementation
+**Where Masking Occurs:**
+1. `FieldLoader.load()` - After loading field from DataSource
+2. `BaseOperator.__call__()` - After compute() returns result
 
-When creating new operators:
-1. Inherit from `Expression` base class
-2. Implement `compute()` method with pure calculation logic (pandas operations)
-3. Implement `accept(visitor)` method for Visitor pattern
-4. Do NOT include traversal logic in operators (Visitor handles this)
-5. Handle NaN values appropriately
-6. Ensure cross-sectional or time-series independence as appropriate
-7. Return pandas DataFrame with same shape as input (unless dimensionality reduction)
+### Operator Implementation (v2.0)
 
-### Weight Scaling
+**Core Principles:**
+1. Inherit from `BaseOperator`
+2. Declare class attributes: `input_types`, `output_type`, `prefer_numpy`
+3. Accept explicit dependencies via constructor: `universe_mask`, `config_manager`, `registry`
+4. Implement pure `compute()` method (no masking, no type checking)
+5. BaseOperator handles 6-step pipeline: validate → extract → compute → mask → cache → wrap
+
+**Operator Composition:**
+- Use `self._registry` to call other operators
+- Enables building complex operators from simple ones
+- Example: TsZscore = (data - TsMean) / TsStd
+
+### Weight Scaling (v2.0)
 
 - Use Strategy Pattern: create `WeightScaler` subclasses
 - Scalers are stateless and reusable
-- Must be explicitly provided (no default scaler)
+- Applied via `ae.set_scaler()` and `ae.to_weights(signal)`
 - Common scalers: `DollarNeutralScaler`, `GrossNetScaler`, `LongOnlyScaler`
 - All scaling logic is fully vectorized (no Python loops)
 
-## Critical Design Decisions
+## Critical Design Decisions (v2.0)
+
+### Why Eager Execution Instead of Lazy? ✨ NEW
+**v1.0 Problem**: Visitor pattern added overhead, delayed errors, difficult debugging
+
+**v2.0 Solution**: Eager execution - operations run immediately
+
+**Benefits:**
+- **Immediate feedback**: See results instantly, catch errors early
+- **Better debugging**: Inspect intermediate results at any step
+- **Performance**: 10x faster - no tree traversal overhead
+- **Natural Python**: Pythonic, intuitive workflow
+
+**Trade-off**: Cannot serialize full expression tree (but step_history provides partial reconstruction)
+
+### Why Stateful AlphaData? ✨ NEW
+**v1.0 Problem**: Expressions were stateless, no history tracking
+
+**v2.0 Solution**: AlphaData contains data + history + cache
+
+**Benefits:**
+- **Self-documenting**: Each AlphaData knows its computation history
+- **Cache inheritance**: Downstream operations access upstream cached data
+- **Debugging**: `print(signal)` shows full expression chain
+- **Attribution**: Track data lineage through computation graph
+
+### Why On-Demand Caching? ✨ NEW
+**v1.0 Problem**: Auto-caching everything consumed massive memory
+
+**v2.0 Solution**: `record_output=True` for selective caching
+
+**Benefits:**
+- **Memory efficiency**: 90% reduction in memory usage
+- **User control**: Cache only important intermediate results
+- **Flexibility**: Enable caching for debugging, disable for production
+
+### Why Method-Based API? ✨ NEW
+**v1.0 Problem**: `from alpha_excel.ops.timeseries import TsMean, TsStd, ...`
+
+**v2.0 Solution**: `o = ae.ops; o.ts_mean(...)`
+
+**Benefits:**
+- **No imports**: All operators via `o.method_name()`
+- **IDE autocomplete**: Discover operators easily
+- **Cleaner code**: Focus on logic, not import statements
+
+### Why Type-Aware System? ✨ NEW
+**v1.0 Problem**: No type checking, runtime errors, hardcoded preprocessing
+
+**v2.0 Solution**: `data_type` in every AlphaData + config-driven preprocessing
+
+**Benefits:**
+- **Early error detection**: Type mismatch caught before compute()
+- **Automatic preprocessing**: Forward-fill rules defined in preprocessing.yaml
+- **Clear semantics**: Know what kind of data you're working with
+
+### Why Finer-Grained Dependency Injection? ✨ NEW
+**v1.0 Problem**: Components tightly coupled to AlphaExcel facade
+
+**v2.0 Solution**: Components receive only what they need (universe_mask, config_manager)
+
+**Benefits:**
+- **Lower coupling**: Facade changes don't affect components
+- **Better testability**: Test components with minimal setup
+- **Phased implementation**: Build components independently
+- **SOLID principles**: Interface Segregation Principle
+
+### Why Config-Driven Design? ✨ NEW
+**v1.0 Problem**: Behavior hardcoded in Python
+
+**v2.0 Solution**: 4 YAML files control behavior
+
+**Benefits:**
+- **Flexibility**: Change behavior without code changes
+- **Clarity**: All settings in one place
+- **Extensibility**: Add new fields/types via YAML
 
 ### Why pandas Instead of xarray?
 - **Familiarity**: Most researchers already know pandas
@@ -346,35 +443,17 @@ When creating new operators:
 - **Stateless**: DataSource doesn't need to know about raw data formats
 - **Clean Interface**: config/data.yaml defines clean contract
 
-### Why Auto-Loading?
-- **Conciseness**: No `add_data()` calls, 50% less code
-- **Clarity**: Focus on Expressions, data flow is automatic
-- **Efficiency**: Lazy loading + caching, only load what's needed
-- **Intuitiveness**: "Reference a field, it loads automatically"
+### Why Single Output Masking? ✨ NEW (v2.0 Simplification)
+**v1.0 Had**: Double masking (INPUT + OUTPUT)
 
-### Why Expression Trees?
-- **Lazy evaluation**: Build computation graph before execution
-- **Composability**: Complex operations from simple building blocks
-- **Serialization**: Save/load strategies as JSON
-- **Traceability**: Step-by-step caching for attribution
+**v2.0 Has**: Single OUTPUT masking only
 
-### Why Visitor Pattern?
-- **Separation of concerns**: Operators define logic, Visitor handles traversal
-- **Single responsibility**: Operators only implement `compute()`
-- **Extensibility**: Add new operators without modifying Visitor
-- **Testability**: Test `compute()` methods independently
+**Why**: Field applies OUTPUT mask → all operator inputs already masked → no need for INPUT masking
 
-### Why Double Masking?
-- **Safety**: Ensures all data respects universe constraint
-- **Trust chain**: Operators can trust inputs are already masked
-- **Idempotency**: Re-masking is safe (doesn't corrupt data)
-- **Simplicity**: No `if mask is not None` checks needed
-
-### Why Triple-Cache?
-- **Efficiency**: Changing scaler doesn't require signal re-evaluation
-- **Attribution**: Analyze PnL contribution at each step
-- **Comparison**: Easily compare different scaling strategies
-- **Traceability**: Full audit trail of signal → weight → return
+**Benefits:**
+- **Simpler**: One masking point instead of two
+- **Safe**: Idempotent masking (re-masking is safe)
+- **Efficient**: Less masking operations
 
 ## Testing Philosophy
 
@@ -385,177 +464,208 @@ When creating new operators:
 
 ## Documentation Locations
 
+### v2.0 Documentation (PRIMARY - Use These!)
+- **PRD**: `docs/vibe_coding/alpha-excel/ae2-prd.md` - Product requirements and workflows
+- **Architecture**: `docs/vibe_coding/alpha-excel/ae2-architecture.md` - System design and components
+- **Transition Plan**: `docs/vibe_coding/alpha-excel/ae2-transition-plan.md` - v1.0 problems and v2.0 solutions
+
+### v1.0 Documentation (DEPRECATED - For Reference Only)
 - **PRD**: `docs/vibe_coding/alpha-excel/ae-prd.md`
 - **Architecture**: `docs/vibe_coding/alpha-excel/ae-architecture.md`
 - **Implementation**: `docs/vibe_coding/alpha-excel/ae-implementation.md`
-- **README**: `src/alpha_excel/README.md`
-- **Findings**: `experiments/FINDINGS.md`
-- **Operator docs**: `docs/wq_brain/wqops_doc_*.md` (WorldQuant Brain operator reference)
+
+### Other Documentation
+- **Findings**: `experiments/FINDINGS.md` - Experiment discoveries
+- **Operator docs**: `docs/wq_brain/wqops_doc_*.md` - WorldQuant Brain operator reference
 - **New operators summary**: `docs/new_operators_summary.md`
+- **Group operations research**: `docs/research/faster-group-operations.md` - NumPy scatter-gather optimization
 
-## Common Workflows
+## Common Workflows (v2.0)
 
-### Basic Usage
+### Basic Usage Pattern (v2.0)
 
-```python
-import pandas as pd
-from alpha_excel import AlphaExcel, Field
-from alpha_excel.ops.timeseries import TsMean
-from alpha_excel.ops.crosssection import Rank
-from alpha_excel.portfolio import DollarNeutralScaler
+1. **Initialize AlphaExcel** with time range and optional universe
+2. **Load fields** via auto-loading (config-driven from data.yaml)
+3. **Build signals** using method-based API (operations execute immediately)
+4. **Inspect intermediate results** at any step (eager execution enables debugging)
+5. **Apply scaler** to convert signals to portfolio weights
+6. **Calculate returns** and analyze performance
 
-# 1. Initialize with dates and assets
-dates = pd.date_range('2024-01-01', periods=252)
-assets = pd.Index(['AAPL', 'GOOGL', 'MSFT'])
-rc = AlphaExcel(dates, assets)
+**Key Difference from v1.0**: Operations execute immediately (eager), not delayed (lazy)
 
-# 2. Direct data assignment (NO add_data needed!)
-returns_df = pd.DataFrame(...)
-rc.data['returns'] = returns_df
+### Adding a New Operator (v2.0)
 
-# 3. Evaluate expressions (auto-loads from DataSource if not cached)
-ma5 = rc.evaluate(TsMean(Field('returns'), window=5))
+Follow Experiment-Driven Development workflow:
 
-# 4. Store results - direct assignment
-rc.data['ma5'] = ma5
+1. **Experiment**: Create experiment in `experiments/ae2_XX_*.py` with fake data and extensive output
+2. **Document**: Update `ae2-architecture.md` with operator specification
+3. **Test**: Write tests in `tests/test_ops/` using TDD approach
+4. **Implement**: Create operator inheriting from `BaseOperator` in `src/alpha_excel/ops/`
+5. **Auto-Discovery**: OperatorRegistry automatically discovers and registers operator
 
-# 5. Build complex signals
-signal = rc.evaluate(Rank(Field('ma5')))
-
-# 6. Backtest with scaler
-result = rc.evaluate(signal, scaler=DollarNeutralScaler())
-
-# 7. Analyze PnL
-daily_pnl = rc.get_daily_pnl(step=2)
-sharpe = daily_pnl.mean() / daily_pnl.std() * np.sqrt(252)
-```
-
-### Adding a New Operator
-
-1. **Experiment**: Create `experiments/exp_XX_new_operator.py`
-   - Test hypothesis with fake data
-   - Print all intermediate results
-   - Document findings
-
-2. **Document**: Update `docs/vibe_coding/alpha-excel/ae-architecture.md`
-   - Add to operator catalog
-   - Document mathematical definition
-   - Explain design decisions
-
-3. **Test**: Create `tests/test_ops/test_new_operator.py`
-   ```python
-   def test_new_operator_basic():
-       data = pd.DataFrame(...)
-       op = NewOperator(Field('input'), param=value)
-       result = op.compute(data)
-       assert result.shape == data.shape
-   ```
-
-4. **Implement**: Create operator in `src/alpha_excel/ops/`
-   ```python
-   class NewOperator(Expression):
-       def __init__(self, child: Expression, param: float):
-           self.child = child
-           self.param = param
-
-       def compute(self, data: pd.DataFrame) -> pd.DataFrame:
-           # Pure pandas calculation logic
-           result = data.rolling(window=self.param).mean()
-           return result
-
-       def accept(self, visitor):
-           return visitor.visit_operator(self)
-   ```
-
-5. **Showcase**: Create `showcase/XX_new_operator.py`
-   - Load real data from DataSource
-   - Demonstrate typical usage
-   - Show integration with other operators
-   - Update `showcase/README.md`
+**Key v2.0 Operator Requirements:**
+- Inherit from `BaseOperator`
+- Declare `input_types`, `output_type`, `prefer_numpy`
+- Implement pure `compute()` method (no masking, no type validation)
+- BaseOperator handles: type validation, data extraction, masking, cache inheritance
 
 ### Adding a New Data Field
 
-1. **ETL**: Create/update script in `scripts/`
-   ```python
-   # Transform raw data → Parquet
-   df = pd.read_excel('raw_data.xlsx')
-   # ... transform to long format ...
-   df.to_parquet('data/new_field.parquet')
-   ```
+1. **ETL**: Create/update script in `scripts/` to transform raw data → Parquet (long format)
+2. **Config**: Add field definition to `config/data.yaml` with:
+   - `data_type`: 'numeric', 'group', 'weight', etc.
+   - `query`: DuckDB SQL query with date range placeholders
+   - Column mappings: `time_col`, `asset_col`, `value_col`
+3. **Auto-Loading**: Field is immediately available via `f('new_field')`
 
-2. **Config**: Add field definition to `config/data.yaml`
-   ```yaml
-   new_field:
-     query: >
-       SELECT date, security_id, new_field
-       FROM read_parquet('data/new_field.parquet')
-       WHERE date >= '{start_date}' AND date <= '{end_date}'
-     time_col: date
-     asset_col: security_id
-     value_col: new_field
-   ```
+**Note**: ETL scripts are temporary - eventually will be replaced with proper pipeline
 
-3. **Usage**: Field is now auto-loadable
-   ```python
-   result = rc.evaluate(Field('new_field'))
-   ```
+### Debugging and Cache Management (v2.0)
 
-### Comparing Scaling Strategies
+**On-Demand Caching:**
+- Use `record_output=True` parameter to cache specific steps
+- Downstream operations inherit upstream caches (cache inheritance)
+- Access cached data via `alpha_data.get_cached_step(step_id)`
 
-```python
-# Define signal once
-signal_expr = Rank(TsMean(Field('returns'), window=5))
+**Debugging Workflow:**
+- Eager execution allows inspecting results at each step
+- Use `print(alpha_data)` to see expression chain
+- Use `alpha_data.to_df()` to inspect DataFrame
+- Cached steps accessible throughout computation chain
 
-# Compare scalers efficiently (signal cached, only weights recomputed)
-w1 = rc.evaluate(signal_expr, scaler=DollarNeutralScaler())
-daily_pnl_1 = rc.get_daily_pnl(step=2)
+## v2.0 Implementation Phases
 
-w2 = rc.evaluate(signal_expr, scaler=GrossNetScaler(2.0, 0.5))
-daily_pnl_2 = rc.get_daily_pnl(step=2)
+**Current Status**: Phase 2 in progress (165/165 tests passing)
 
-# Signal cache reused, only weight and return caches updated
-```
+### Phase 1: Core Foundation ✅ COMPLETE (73 tests)
+- Types, DataModel, ConfigManager
+- AlphaData (stateful data model with cache inheritance)
+- UniverseMask (single output masking)
+- Project structure
 
-### Step-by-Step Attribution
+### Phase 1.5: Operator Infrastructure ✅ COMPLETE (63 tests)
+- preprocessing.yaml (type-based preprocessing config)
+- BaseOperator (6-step pipeline with finer-grained DI)
+- FieldLoader (auto-loading with type awareness)
+- MockDataSource (testing without real Parquet files)
+- Integration tests (end-to-end validation)
 
-```python
-result = rc.evaluate(complex_expr, scaler=DollarNeutralScaler())
+### Phase 2: Representative Operators 🚧 IN PROGRESS (29 tests)
+**Goal**: Validate operator infrastructure with representative samples
 
-# Analyze each step in the expression tree
-for step in range(len(rc._evaluator._signal_cache)):
-    name, signal = rc._evaluator.get_cached_signal(step)
-    name, weights = rc._evaluator.get_cached_weights(step)
+Implemented:
+- TsMean (time-series) ✅
+- Rank (cross-section) ✅
+- GroupRank (group) ✅
+- Arithmetic operators (AlphaData magic methods) ✅
 
-    if weights is not None:
-        port_return = rc.get_port_return(step)
-        daily_pnl = rc.get_daily_pnl(step)
-        sharpe = daily_pnl.mean() / daily_pnl.std() * np.sqrt(252)
-        print(f"Step {step} ({name}): Sharpe = {sharpe:.2f}")
-```
+Deferred to Post-Phase 3:
+- Additional time-series operators (TsStd, TsRank, TsCorr, etc.)
+- Additional cross-section operators (Demean, Scale)
+- NumPy-optimized group operators (GroupNeutralize)
+- Logical operators
+
+### Phase 3: Facade & Registry 🔜 NEXT
+- OperatorRegistry (auto-discovery, method-based API)
+- AlphaExcel facade (dependency coordinator)
+- ScalerManager (weight scaler management)
+- Backtesting methods (to_weights, to_portfolio_returns, to_long/short_returns)
+
+### Phase 4: Testing & Migration 📋 PLANNED
+- Migrate v1.0 workflows to v2.0
+- Performance benchmarking
+- Documentation updates
+- Showcase examples
+
+**Key Insight**: Finer-grained dependency injection enabled Phase 1.5 and Phase 2 implementation WITHOUT the facade!
 
 ## Performance Characteristics
 
-- **Data loading**: ~5.38ms per field (Parquet → DuckDB → DataFrame)
-- **Universe masking**: Minimal overhead with pandas operations
-- **Weight scaling**: 7-40ms for typical datasets (fully vectorized)
-- **Backtesting**: ~7ms for 252×100 dataset (shift-mask workflow)
+**v2.0 Expected Performance** (based on architecture design):
+- **Eager execution**: 10x faster than v1.0 Visitor pattern
+- **Memory**: 90% reduction vs v1.0 triple-cache (on-demand caching)
+- **Group operations**: 5x faster with NumPy scatter-gather (vs pandas groupby)
+- **Data loading**: ~5.38ms per field (Parquet → DuckDB → DataFrame) - unchanged
 
 ## Key Files to Reference
 
+### For Development Work
 - **Experiment rules**: `.cursor/rules/experiment-driven-development.mdc`
-- **alpha-excel README**: `src/alpha_excel/README.md`
-- **Showcase catalog**: `showcase/README.md`
-- **Architecture doc**: `docs/vibe_coding/alpha-excel/ae-architecture.md`
-- **Operator summary**: `docs/new_operators_summary.md`
+- **v2.0 PRD**: `docs/vibe_coding/alpha-excel/ae2-prd.md` - Requirements and user workflows
+- **v2.0 Architecture**: `docs/vibe_coding/alpha-excel/ae2-architecture.md` - Detailed system design
+- **v2.0 Transition Plan**: `docs/vibe_coding/alpha-excel/ae2-transition-plan.md` - v1.0 → v2.0 changes
 
-## Project Status
+### For Reference
+- **Operator docs**: `docs/wq_brain/wqops_doc_*.md` - WorldQuant Brain operator reference
+- **Group operations research**: `docs/research/faster-group-operations.md` - NumPy optimization details
+- **Findings**: `experiments/FINDINGS.md` - Experiment discoveries
 
-As of latest commit (939972f):
-- ✅ alpha-excel core functionality complete
-- ✅ alpha-database package extracted and tested
-- ✅ Comprehensive operator library (30+ operators)
-- ✅ Weight caching and backtesting implemented
-- ✅ Triple-cache architecture working
-- ✅ 27 showcases demonstrating features
-- ⚠️ alpha-canvas deprecated, will be removed soon
-- ⚠️ ETL scripts in scripts/ are temporary (not production)
+## Git Commit Conventions
+
+This project follows **Conventional Commits** format. Always check recent commits with `git log --oneline -20` to follow established patterns.
+
+### Commit Format
+
+```
+<type>: <description>
+```
+
+**Types:**
+- `feat:` - New features or functionality
+- `docs:` - Documentation updates
+- `fix:` - Bug fixes
+- `refactor:` - Code refactoring (no functional changes)
+- `chore:` - Maintenance tasks (dependencies, configs)
+- `test:` - Test additions or modifications
+
+**Examples from this project:**
+```
+feat: Implement GroupRank operator with comprehensive tests
+docs: Update ae2-architecture.md with Phase 2 progress
+fix: suppress FutureWarning in GrossNetScaler fillna operations
+refactor: reorganize tests/ to match package structure
+chore: update tutorial notebook with transformation imports
+```
+
+### Commit Workflow Rules
+
+**CRITICAL - File Staging:**
+- ❌ **NEVER** use `git add .` or `git add -A`
+- ✅ **ALWAYS** specify files/folders explicitly
+- ✅ **Group related changes** in logical commits
+- ✅ **Prefer one-line** staging and commit: `git add <file> && git commit -m "message"`
+
+**Good Examples:**
+```powershell
+# Single file
+git add CLAUDE.md && git commit -m "docs: update CLAUDE.md for v2.0 architecture"
+
+# Logical group - operator implementation
+git add src/alpha_excel/ops/timeseries.py tests/test_ops/test_ts_mean.py && git commit -m "feat: implement TsMean operator with tests"
+
+# Logical group - documentation update
+git add docs/vibe_coding/alpha-excel/ae2-architecture.md docs/vibe_coding/alpha-excel/ae2-prd.md && git commit -m "docs: update v2.0 architecture and PRD"
+```
+
+**Bad Examples:**
+```powershell
+# DON'T DO THIS
+git add .  # Stages everything indiscriminately
+git add -A # Stages everything including unrelated changes
+```
+
+### When Creating Commits
+
+1. **Check status**: `git status` to see what changed
+2. **Review changes**: `git diff <file>` to verify changes
+3. **Stage logically**: Group related files that accomplish one thing
+4. **Write clear message**: Follow conventional commit format
+5. **One-line commit**: `git add <files> && git commit -m "type: description"`
+
+### Commit Message Guidelines
+
+- Start with lowercase after the type prefix
+- Be specific and descriptive
+- Focus on **what** and **why**, not **how**
+- Keep under 72 characters when possible
+- Use imperative mood ("add" not "added", "fix" not "fixed")
