@@ -1,0 +1,1061 @@
+# Alpha Excel v2.0 - Architecture Document
+
+## 2.0. 개요
+
+alpha-excel v2.0은 **Eager Execution**, **Stateful Data Model**, **Type-Aware System**, **Config-Driven Design**을 기반으로 v1.0의 성능과 사용성 문제를 해결합니다.
+
+**핵심 아키텍처 변경:**
+- ❌ Visitor 패턴 (Lazy) → ✅ Eager execution
+- ❌ Stateless Expression → ✅ Stateful AlphaData + Stateless Operators
+- ❌ 전체 캐싱 (triple-cache) → ✅ 선택적 캐싱 (cache inheritance)
+- ❌ Class import 필요 → ✅ Method-based API (registry)
+- ❌ 하드코딩된 설정 → ✅ Config-driven (YAML)
+
+### 2.0.1. 전체 시스템 아키텍처
+
+```mermaid
+graph TB
+    User["User/Researcher"]
+
+    subgraph "AlphaExcel Facade"
+        AE["AlphaExcel"]
+        FL["FieldLoader"]
+        OR["OperatorRegistry"]
+        SM["ScalerManager"]
+        UM["UniverseMask"]
+        CM["ConfigManager"]
+    end
+
+    subgraph "Data Model (Stateful)"
+        DM["DataModel (parent)"]
+        AD["AlphaData<br/>_data, _cache, _history, _type"]
+    end
+
+    subgraph "Operators (Stateless)"
+        BO["BaseOperator"]
+        TSO["TimeSeriesOps"]
+        CSO["CrossSectionOps"]
+        GO["GroupOps"]
+    end
+
+    subgraph "Config Files"
+        DC["data.yaml"]
+        OC["operators.yaml"]
+        SC["settings.yaml"]
+        PC["preprocessing.yaml"]
+    end
+
+    subgraph "Data Source"
+        DS["DataSource<br/>alpha-database"]
+        PQ[("Parquet Files")]
+    end
+
+    User -->|"initialize"| AE
+    AE -->|"owns"| FL
+    AE -->|"owns"| OR
+    AE -->|"owns"| SM
+    AE -->|"owns"| UM
+    AE -->|"owns"| CM
+
+    DM -->|"subclass"| AD
+    DM -->|"subclass"| UM
+
+    FL -->|"loads from"| DS
+    FL -->|"creates"| AD
+    FL -->|"reads config"| CM
+
+    OR -->|"dispatches to"| BO
+    BO -->|"subclasses"| TSO
+    BO -->|"subclasses"| CSO
+    BO -->|"subclasses"| GO
+    BO -->|"creates"| AD
+    BO -->|"reads config"| CM
+
+    CM -->|"reads"| DC
+    CM -->|"reads"| OC
+    CM -->|"reads"| SC
+    CM -->|"reads"| PC
+
+    DS -->|"queries"| PQ
+
+    AD -->|"applies"| UM
+```
+
+### 2.0.2. Eager Execution 데이터 흐름 (v1.0 대비)
+
+**v1.0 (Lazy Execution):**
+```
+Expression 트리 구축 → evaluate() 호출 → Visitor 순회 → 모든 노드 평가 → 결과 반환
+(지연 평가: 트리 구축 시점에는 계산 안 함)
+```
+
+**v2.0 (Eager Execution):**
+```
+f('returns') → 즉시 DataSource 쿼리 → AlphaData 반환
+↓
+o.ts_mean(returns, 5) → 즉시 compute() → AlphaData 반환
+↓
+o.rank(ma5) → 즉시 compute() → AlphaData 반환
+(각 단계마다 즉시 계산 및 결과 반환)
+```
+
+**Eager 흐름 상세:**
+```mermaid
+flowchart LR
+    A["User Code"] -->|"o.ts_mean 호출"| B["OperatorRegistry"]
+    B -->|"dispatch"| C["TsMean.__call__"]
+    C -->|"1. validate types"| C
+    C -->|"2. extract data"| D["returns.to_df()"]
+    D -->|"DataFrame"| C
+    C -->|"3. compute()"| E["TsMean.compute()"]
+    E -->|"rolling.mean()"| F["Result DataFrame"]
+    F -->|"4. universe mask"| C
+    C -->|"5. cache inherit"| C
+    C -->|"6. wrap AlphaData"| G["AlphaData<br/>step=1"]
+    G -->|"즉시 반환"| A
+```
+
+### 2.0.3. Cache Inheritance 흐름
+
+```mermaid
+flowchart TB
+    A["ma5 = ts_mean(returns, 5)<br/>record_output=True"]
+    B["ma5._cache = []<br/>ma5._cached = True<br/>ma5._step = 1"]
+
+    C["momentum = ma5 - ma20"]
+    D["momentum._cache = [{step:1, name:'ts_mean(...)', data:ma5._data}]<br/>momentum._cached = False<br/>momentum._step = 2"]
+
+    E["signal = rank(momentum)"]
+    F["signal._cache = [{step:1, name:'ts_mean(...)', data:ma5._data}]<br/>signal._cached = False<br/>signal._step = 3"]
+
+    G["signal.get_cached_step(1)<br/>→ ma5._data"]
+
+    A --> B
+    B --> C
+    C --> D
+    D --> E
+    E --> F
+    F --> G
+
+    style B fill:#e1f5e1
+    style D fill:#fff4e1
+    style F fill:#fff4e1
+```
+
+**핵심:**
+- `record_output=True`로 캐싱된 step만 downstream `_cache`에 자동 복사됨
+- momentum._cached = False이므로 signal._cache에는 ma5만 포함 (momentum은 불포함)
+- Cache는 `List[CachedStep]` 구조로 step collision 방지
+
+---
+
+## 2.1. 핵심 컴포넌트 상세 설계
+
+### A. DataModel (Parent Class)
+
+**역할:** UniverseMask와 AlphaData의 공통 부모 클래스. DataFrame을 보유하며 시간/자산 축 메타데이터 제공.
+
+#### 클래스 구조
+
+```python
+class DataModel(ABC):
+    """Base class for data-holding objects (UniverseMask, AlphaData)."""
+
+    _data: pd.DataFrame       # (T, N) DataFrame
+    _data_type: str          # 'numeric', 'group', 'weight', 'mask', etc.
+
+    @property
+    def start_time(self) -> pd.Timestamp: ...
+
+    @property
+    def end_time(self) -> pd.Timestamp: ...
+
+    @property
+    def time_list(self) -> pd.DatetimeIndex: ...
+
+    @property
+    def security_list(self) -> pd.Index: ...
+
+    def __len__(self) -> int:
+        """Number of time periods."""
+        return len(self._data)
+```
+
+**Design Note:** "time" 용어 사용 (not "date") → 암호화폐 분봉 데이터 등 지원 고려
+
+---
+
+### B. AlphaData (Stateful Data Model)
+
+**역할:** pandas DataFrame을 wrapping하며 **연산 히스토리**, **타입 정보**, **upstream 캐시**를 추적하는 상태 유지 데이터 모델
+
+#### 1. 클래스 구조
+
+```python
+from typing import List, Dict, Optional
+from dataclasses import dataclass
+
+@dataclass
+class CachedStep:
+    """Cached step data structure."""
+    step: int
+    name: str              # Expression like "ts_mean(returns, 5)"
+    data: pd.DataFrame
+
+class AlphaData(DataModel):
+    """Stateful data model with history tracking and cache inheritance."""
+
+    # Inherited from DataModel
+    _data: pd.DataFrame
+    _data_type: str
+
+    # AlphaData-specific
+    _step_counter: int
+    _step_history: List[Dict]
+    _cached: bool
+    _cache: List[CachedStep]  # List to avoid key collision
+
+    def __init__(self, data, data_type='numeric', step_counter=0, ...): ...
+```
+
+**Cache Key Collision 해결:**
+```python
+# 문제: Dict[int, DataFrame]는 step collision 발생
+a = f('returns')               # step = 0
+b = ts_mean(a, 5, record=True)    # step = 1
+c = rank(a, record=True)          # step = 1 (also!) → collision!
+
+# 해결: List[CachedStep]
+d = b + c
+d._cache = [
+    CachedStep(step=1, name="ts_mean(returns, 5)", data=b._data),
+    CachedStep(step=1, name="rank(returns)", data=c._data)
+]
+```
+
+#### 2. 주요 메서드
+
+```python
+def to_df(self) -> pd.DataFrame: ...
+def to_numpy(self) -> np.ndarray: ...
+
+# Arithmetic operators
+def __add__(self, other) -> 'AlphaData': ...
+def __sub__(self, other) -> 'AlphaData': ...
+def __mul__(self, other) -> 'AlphaData': ...
+def __truediv__(self, other) -> 'AlphaData': ...
+def __pow__(self, other) -> 'AlphaData': ...   # **
+
+# Cache access
+def get_cached_step(self, step_id: int) -> Optional[pd.DataFrame]:
+    """Retrieve cached data by step number."""
+    for cached in self._cache:
+        if cached.step == step_id:
+            return cached.data.copy()
+    return None
+```
+
+#### 3. Step Counter Logic (Multi-Input)
+
+**Rule:** Multi-input operator의 step counter는 **max(input_step_counters) + 1**
+
+```python
+# Example: group_neutralize(ts_mean(f('returns'), 3), f('subindustry'))
+
+returns = f('returns')                   # step = 0
+subindustry = f('subindustry')          # step = 0
+ma3 = o.ts_mean(returns, 3)             # step = 1
+
+result = o.group_neutralize(ma3, subindustry)
+# result._step_counter = max(1, 0) + 1 = 2
+```
+
+#### 4. Type 전파 규칙
+
+| 연산 | Input Type | Output Type | 예시 |
+|------|-----------|-------------|------|
+| Arithmetic (+, -, *, /) | numeric | numeric | ma5 - ma20 |
+| TsMean, TsStd | numeric | numeric | ts_mean(returns, 5) |
+| Rank, Demean | numeric | numeric | rank(signal) |
+| GroupNeutralize | numeric, group | numeric | group_neutralize(signal, industry) |
+| ConcatGroups | group, group | group | concat_groups(sector, industry) |
+| to_weights() | numeric | weight | ae.to_weights(signal) |
+| to_portfolio_returns() | weight | port_return | ae.to_portfolio_returns(w) |
+
+**Operators 속성:**
+```python
+class ConcatGroups(BaseOperator):
+    input_types = ['group', 'group']
+    output_type = 'group'
+```
+
+---
+
+### C. BaseOperator (Stateless Operators)
+
+**역할:** 순수 계산 로직을 제공하는 stateless operator 기반 클래스.
+
+#### 1. 클래스 계층 구조
+
+```
+BaseOperator (ABC)
+├── TimeSeriesOperator
+│   ├── TsMean, TsStd, TsRank
+│   ├── TsMax, TsMin, TsSum
+│   └── TsCorr, TsCovariance
+├── CrossSectionOperator
+│   ├── Rank, Demean, Scale
+├── GroupOperator
+│   ├── GroupNeutralize (NumPy)
+│   ├── GroupRank (Pandas)
+│   ├── GroupSum, GroupMean
+│   ├── ConcatGroups
+│   └── LabelQuantile
+├── ArithmeticOperator
+│   ├── Add, Subtract, Multiply, Divide
+│   └── Power, Abs, Log
+└── LogicalOperator
+    ├── Greater, Less, Equal
+    └── And, Or, Not
+```
+
+#### 2. Type Declaration (Class Attributes)
+
+```python
+class BaseOperator(ABC):
+    """Base class for all operators."""
+
+    input_types: List[str] = ['numeric']  # Expected input types
+    output_type: str = 'numeric'          # Output type
+    prefer_numpy: bool = False
+
+    def __call__(self, *inputs, record_output=False, **params) -> AlphaData:
+        # 1. Validate types
+        # 2. Extract data
+        # 3. compute()
+        # 4. OUTPUT mask
+        # 5. Inherit cache
+        # 6. Construct AlphaData
+        ...
+
+    @abstractmethod
+    def compute(self, *data, **params): ...
+```
+
+#### 3. Cache Inheritance Logic
+
+```python
+def _inherit_caches(self, inputs: Tuple[AlphaData, ...]) -> List[CachedStep]:
+    """Merge caches from inputs, adding cached inputs themselves."""
+    merged = []
+
+    for inp in inputs:
+        # 1. Copy upstream caches
+        merged.extend(inp._cache)
+
+        # 2. If THIS input is cached, add it
+        if inp._cached:
+            cached_step = CachedStep(
+                step=inp._step_counter,
+                name=inp._build_expression_string(),
+                data=inp._data.copy()
+            )
+            merged.append(cached_step)
+
+    return merged
+```
+
+#### 4. Step Counter Calculation
+
+```python
+def _compute_step_counter(self, inputs: Tuple[AlphaData, ...]) -> int:
+    """Use max of input step counters + 1."""
+    return max(inp._step_counter for inp in inputs) + 1
+```
+
+---
+
+### D. OperatorRegistry (Method-Based API)
+
+**역할:** 모든 operator를 method로 제공하는 통합 레지스트리. Import 불필요.
+
+#### 1. Auto-Discovery 메커니즘
+
+```python
+import inspect
+from alpha_excel.ops import timeseries, crosssection, group, arithmetic, logical
+
+class OperatorRegistry:
+    """Registry for all operators with method-based access."""
+
+    def __init__(self, alpha_excel: 'AlphaExcel'):
+        self._ae = alpha_excel
+        self._operators: Dict[str, BaseOperator] = {}
+        self._discover_operators()
+
+    def _discover_operators(self):
+        """Auto-discover all BaseOperator subclasses."""
+        modules = [timeseries, crosssection, group, arithmetic, logical]
+
+        for module in modules:
+            for name, obj in inspect.getmembers(module, inspect.isclass):
+                if issubclass(obj, BaseOperator) and obj is not BaseOperator:
+                    # Convert CamelCase to snake_case
+                    method_name = self._camel_to_snake(name)
+
+                    # Instantiate operator
+                    self._operators[method_name] = obj(self._ae, self)
+
+    def _camel_to_snake(self, name: str) -> str:
+        """TsMean → ts_mean, GroupNeutralize → group_neutralize"""
+        import re
+        s1 = re.sub('(.)([A-Z][a-z]+)', r'\1_\2', name)
+        return re.sub('([a-z0-9])([A-Z])', r'\1_\2', s1).lower()
+```
+
+#### 2. Method Dispatch
+
+```python
+def __getattr__(self, name: str):
+    """Dynamic method access (o.ts_mean, o.rank, etc.)"""
+    if name in self._operators:
+        return self._operators[name]
+    raise AttributeError(f"Operator '{name}' not found. Use list_operators() to see available.")
+
+def list_operators(self) -> List[str]:
+    """List all available operators."""
+    return sorted(self._operators.keys())
+```
+
+#### 3. Operator Composition 지원
+
+**문제:** Compound operator (예: TsZscore)가 다른 operator를 호출하려면?
+**해결:** `self._registry` 참조
+
+```python
+class TsZscore(BaseOperator):
+    output_type = 'numeric'
+    input_types = ['numeric']
+
+    def __call__(self, data: AlphaData, window: int, **kwargs) -> AlphaData:
+        # Registry를 통해 기존 operator 호출
+        mean = self._registry.ts_mean(data, window=window)
+        std = self._registry.ts_std(data, window=window)
+
+        # AlphaData arithmetic operators 활용
+        zscore = (data - mean) / std
+        return zscore
+```
+
+---
+
+### E. AlphaExcel (Facade)
+
+**역할:** 시스템의 단일 진입점. 모든 컴포넌트를 소유하고 초기화.
+
+#### 초기화 순서
+
+```python
+class AlphaExcel:
+    def __init__(self, start_time, end_time, universe=None, config_path='config'):
+        # 1. Timestamps
+        self._start_time = pd.Timestamp(start_time)
+        self._end_time = pd.Timestamp(end_time)
+
+        # 2. ConfigManager (FIRST - others depend on it)
+        self._config_manager = ConfigManager(config_path)
+
+        # 3. DataSource
+        self._data_source = DataSource(config_path)
+
+        # 4. UniverseMask (before FieldLoader)
+        self._universe_mask = self._initialize_universe(universe)
+
+        # 5. FieldLoader
+        self._field_loader = FieldLoader(self._data_source, self)
+
+        # 6. OperatorRegistry
+        self._ops = OperatorRegistry(self)
+
+        # 7. ScalerManager
+        self._scaler_manager = ScalerManager()
+```
+
+#### Property Accessors
+
+```python
+@property
+def field(self):
+    """f = ae.field; returns = f('returns')"""
+    return self._field_loader.load
+
+@property
+def ops(self):
+    """o = ae.ops; ma5 = o.ts_mean(returns, 5)"""
+    return self._ops
+```
+
+#### Scaler Management
+
+```python
+def set_scaler(self, scaler_class, **params):
+    """
+    Set active scaler with parameters.
+
+    Example:
+        ae.set_scaler(GrossNetScaler, gross=2.0, net=0.5)
+        ae.set_scaler(DollarNeutralScaler)
+    """
+    if isinstance(scaler_class, str):
+        scaler_class = self._scaler_manager._scalers[scaler_class]
+
+    scaler_instance = scaler_class(**params) if params else scaler_class()
+    self._scaler_manager.set_scaler(scaler_instance)
+
+def to_long_returns(self, weights: AlphaData) -> AlphaData:
+    """Long positions returns only."""
+    ...
+
+def to_short_returns(self, weights: AlphaData) -> AlphaData:
+    """Short positions returns only."""
+    ...
+```
+
+---
+
+### F. FieldLoader (Auto-Loading with Type Awareness)
+
+**역할:** DataSource에서 field를 로딩하고 타입별 변환 적용. ConfigManager를 통해 data.yaml 읽기.
+
+#### Loading Pipeline
+
+```python
+class FieldLoader:
+    def __init__(self, data_source, alpha_excel):
+        self._ds = data_source
+        self._ae = alpha_excel
+        self._config_manager = alpha_excel._config_manager
+        self._cache: Dict[str, AlphaData] = {}  # Field cache
+
+    def load(self, name: str) -> AlphaData:
+        """
+        6-Step Pipeline:
+        1. Check cache
+        2. Load from DataSource
+        3. Apply forward-fill (from preprocessing.yaml)
+        4. Convert to category (if group)
+        5. Apply OUTPUT MASK
+        6. Construct AlphaData(step=0, cached=True)
+        """
+        # Step 1
+        if name in self._cache:
+            return self._cache[name]
+
+        # Step 2
+        field_config = self._config_manager.get_field_config(name)
+        data_df = self._ds.load_field(name, ...)
+
+        # Step 3
+        preprocessing_config = self._config_manager.get_preprocessing_config(field_config['data_type'])
+        if preprocessing_config.get('forward_fill'):
+            data_df = data_df.ffill()
+
+        # Step 4
+        if field_config['data_type'] == 'group':
+            data_df = data_df.astype('category')
+
+        # Step 5 (OUTPUT MASK only)
+        data_df = self._ae._universe_mask.apply_mask(data_df)
+
+        # Step 6
+        alpha_data = AlphaData(data=data_df, data_type=field_config['data_type'],
+                               step_counter=0, cached=True, cache=[])
+
+        self._cache[name] = alpha_data
+        return alpha_data
+```
+
+---
+
+### G. UniverseMask (Single Masking Strategy)
+
+**역할:** OUTPUT masking만 적용. Field도 output mask 적용하므로 모든 operator input은 이미 masked 상태 보장.
+
+```python
+class UniverseMask(DataModel):
+    """Universe masking with single OUTPUT masking strategy."""
+
+    def __init__(self, mask: pd.DataFrame):
+        self._data = mask           # Boolean DataFrame (T, N)
+        self._data_type = 'mask'
+
+    def apply_mask(self, data: pd.DataFrame) -> pd.DataFrame:
+        """
+        OUTPUT MASKING: Applied to:
+        - FieldLoader output (Field level)
+        - BaseOperator output (Operator level)
+
+        Since Field applies this mask, all operator inputs are guaranteed masked.
+        """
+        return data.where(self._data, np.nan)
+```
+
+**Integration Points:**
+- FieldLoader: `data_df = self._ae._universe_mask.apply_mask(data_df)`
+- BaseOperator: `result_data = self._ae._universe_mask.apply_mask(result_data)`
+- Backtesting: `weights_masked = self._ae._universe_mask.apply_mask(weights_shifted)`
+
+---
+
+### H. ScalerManager
+
+**역할:** Scaler 등록 및 관리.
+
+```python
+class ScalerManager:
+    def __init__(self):
+        self._scalers = {
+            'DollarNeutral': DollarNeutralScaler,
+            'LongOnly': LongOnlyScaler,
+            'GrossNet': GrossNetScaler  # Class, not instance
+        }
+        self._active_scaler = None
+
+    def set_scaler(self, scaler_instance: WeightScaler):
+        """Set active scaler (already instantiated)."""
+        self._active_scaler = scaler_instance
+```
+
+---
+
+### I. ConfigManager (Config-Driven Design)
+
+**역할:** 4개 YAML 파일 읽기 및 시스템 전체 설정 제공.
+
+```python
+class ConfigManager:
+    def __init__(self, config_path='config'):
+        self._operators_config = self._load_yaml('operators.yaml')
+        self._settings_config = self._load_yaml('settings.yaml')
+        self._data_config = self._load_yaml('data.yaml')
+        self._preprocessing_config = self._load_yaml('preprocessing.yaml')
+
+    def get_field_config(self, field_name: str) -> Dict:
+        """From data.yaml: data_type, query, etc."""
+        ...
+
+    def get_preprocessing_config(self, data_type: str) -> Dict:
+        """From preprocessing.yaml: forward-fill rules."""
+        return self._preprocessing_config.get(data_type, {})
+
+    def get_operator_config(self, operator_name: str) -> Dict:
+        """From operators.yaml: min_periods_ratio, etc."""
+        ...
+
+    def get_setting(self, key: str, default=None) -> Any:
+        """From settings.yaml: buffer_days, etc."""
+        ...
+```
+
+#### Config Files 구조
+
+**preprocessing.yaml** (NEW):
+```yaml
+# Type-based preprocessing rules
+numeric:
+  forward_fill: false
+
+group:
+  forward_fill: true  # Monthly → Daily expansion
+
+weight:
+  forward_fill: false
+
+mask:
+  forward_fill: false
+```
+
+**data.yaml** (unchanged - data retrieval only):
+```yaml
+returns:
+  data_type: numeric
+  query: >
+    SELECT date, symbol, return FROM ...
+
+fnguide_industry_group:
+  data_type: group
+  query: >
+    SELECT date, symbol, industry_group FROM ...
+```
+
+**operators.yaml** (unchanged):
+```yaml
+timeseries:
+  defaults:
+    min_periods_ratio: 0.5
+```
+
+**settings.yaml** (unchanged):
+```yaml
+data_loading:
+  buffer_days: 252
+```
+
+---
+
+### J. Type System
+
+**역할:** 데이터 타입 정의 및 검증.
+
+#### Type Definitions
+
+```python
+class DataType:
+    NUMERIC = 'numeric'
+    GROUP = 'group'
+    WEIGHT = 'weight'
+    PORT_RETURN = 'port_return'
+    MASK = 'mask'              # Changed from EVENT
+    BOOLEAN = 'boolean'
+    OBJECT = 'object'
+```
+
+#### Validation (via Class Attributes)
+
+```python
+class GroupNeutralize(BaseOperator):
+    input_types = ['numeric', 'group']
+    output_type = 'numeric'
+
+class ConcatGroups(BaseOperator):
+    input_types = ['group', 'group']
+    output_type = 'group'
+```
+
+---
+
+## 2.2. 기능별 아키텍처 상세
+
+### F1: Config-Driven Auto-Loading
+
+**Flow:**
+```
+User: f('returns')
+  ↓
+FieldLoader → ConfigManager.get_field_config('returns') → {data_type: 'numeric'}
+  ↓
+ConfigManager.get_preprocessing_config('numeric') → {forward_fill: false}
+  ↓
+DataSource.load_field() → DataFrame
+  ↓
+No forward-fill (numeric type)
+  ↓
+OUTPUT MASK
+  ↓
+AlphaData(step=0, type='numeric', cached=True)
+```
+
+---
+
+### F2: Eager Execution
+
+**Trade-offs:**
+
+| Aspect | Lazy (v1.0) | Eager (v2.0) |
+|--------|-------------|--------------|
+| 성능 | Visitor 순회 오버헤드 | Visitor 오버헤드 제거 |
+| 디버깅 | Expression만 보임 | 중간 결과 즉시 확인 |
+| 메모리 | 모든 step 자동 캐싱 | 선택적 캐싱 |
+
+---
+
+### F3: On-Demand Caching with Cache Inheritance
+
+**Cache Collision 해결:**
+```python
+# Problem: Dict[int, DataFrame]
+b = ts_mean(a, 5, record=True)   # step=1
+c = rank(a, record=True)         # step=1 → COLLISION!
+
+# Solution: List[CachedStep]
+d = b + c
+d._cache = [
+    CachedStep(step=1, name="ts_mean(...)", data=...),
+    CachedStep(step=1, name="rank(...)", data=...)
+]
+```
+
+---
+
+### F4: Weight Scaling
+
+```python
+ae.set_scaler(GrossNetScaler, gross=2.0, net=0.5)
+weights = ae.to_weights(signal)
+```
+
+---
+
+### F5: Backtesting (Shift-Mask Workflow)
+
+```python
+def to_portfolio_returns(self, weights):
+    weights_shifted = weights.to_df().shift(1)
+    weights_masked = self._universe_mask.apply_mask(weights_shifted)  # Re-mask
+    returns_masked = self._universe_mask.apply_mask(self._returns)
+    return AlphaData(data=weights_masked * returns_masked, data_type='port_return', ...)
+```
+
+---
+
+### F6: Type-Aware System
+
+```yaml
+# preprocessing.yaml defines type-based forward-fill
+group:
+  forward_fill: true
+
+# Operators declare types
+class GroupNeutralize:
+    input_types = ['numeric', 'group']
+    output_type = 'numeric'
+```
+
+---
+
+### F7: Operator Registry & Method-Based API
+
+Auto-discovery → `o.ts_mean()`, `o.rank()` → No imports
+
+---
+
+### F8: Group Operations Optimization
+
+NumPy scatter-gather algorithm for improved performance (see `docs/research/faster-group-operations.md`)
+
+---
+
+## 2.3. 성능 최적화
+
+### A. NumPy Scatter-Gather
+
+**Algorithm:**
+1. **Scatter:** 데이터를 그룹별로 흩뿌림 (np.add.at)
+2. **Aggregate:** 그룹별 통계량 계산
+3. **Gather:** 통계량을 원래 shape로 모음
+
+**Performance:** NumPy scatter-gather는 pandas groupby보다 significantly faster (상세 벤치마크는 `docs/research/faster-group-operations.md` 참조)
+
+---
+
+### B. Category dtype for Groups
+
+**Why:**
+- 메모리: 문자열 대비 메모리 절감
+- 속도: Integer indexing → NumPy scatter-gather와 완벽 호환
+- Pandas: category dtype는 내부적으로 integer codes 사용
+
+**Integration:**
+```python
+# FieldLoader
+if data_type == 'group':
+    data_df = data_df.astype('category')
+
+# GroupOperator
+group_codes = group_df.cat.codes.values  # Integer array
+```
+
+---
+
+### C. Pandas vs NumPy Selection
+
+| Operator | prefer_numpy | Reason |
+|----------|-------------|---------|
+| TsMean | False | pandas rolling (C optimized) |
+| Rank | False | pandas rank (C optimized) |
+| GroupNeutralize | True | Custom scatter-gather |
+| GroupSum | True | np.add.at() |
+
+---
+
+### D. Memory Efficiency
+
+**v1.0 (Triple-Cache):**
+- 모든 step의 signal, weight, port_return 자동 캐싱
+- 높은 메모리 사용량
+
+**v2.0 (On-Demand Caching):**
+- `record_output=True`로 선택적 캐싱
+- Cache inheritance로 downstream 접근
+- 메모리 사용량 대폭 감소
+
+---
+
+## 2.4. 설계 원칙 및 근거
+
+### 2.4.1. 왜 Eager Execution인가?
+
+**장점:**
+1. **디버깅 용이:** 중간 결과 즉시 확인 가능
+2. **성능:** Visitor 순회 오버헤드 제거
+3. **메모리 제어:** 사용자가 캐싱 결정
+4. **자연스러운 Python:** 각 연산이 즉시 실행
+
+**단점:**
+1. **Serialization 어려움:** 계산 완료 후에는 Expression 복원 어려움
+   - 해결: step_history로 부분적 재구성
+2. **전체 최적화 불가:** 트리 전체를 보고 최적화 불가
+   - 판단: 개발 경험이 더 중요
+
+**결론:** 리서처의 빠른 iteration과 디버깅이 Serialization보다 중요 → Eager 선택
+
+---
+
+### 2.4.2. 왜 Method-Based API인가?
+
+**v1.0 문제:**
+```python
+from alpha_excel.ops.timeseries import TsMean, TsStd, TsRank
+from alpha_excel.ops.crosssection import Rank, Demean
+from alpha_excel.ops.group import GroupNeutralize
+# 여러 import 필요
+```
+
+**v2.0 해결:**
+```python
+o = ae.ops
+o.ts_mean(), o.ts_std(), o.rank(), o.group_neutralize()
+# Import 불필요
+```
+
+**장점:**
+1. **편의성:** Import 불필요
+2. **발견 가능성:** IDE 자동완성
+3. **일관성:** 모든 operator가 동일한 인터페이스
+
+---
+
+### 2.4.3. 왜 Stateful Data Model인가?
+
+**v1.0 (Stateless Expression):**
+- Expression은 "수식"만 저장, 데이터 없음
+- evaluate() 시점에 데이터 생성
+- 히스토리 추적 불가
+
+**v2.0 (Stateful AlphaData):**
+- 데이터 + 히스토리 + 캐시 모두 저장
+- 각 단계의 AlphaData가 자신의 계보 알고 있음
+- Cache inheritance로 upstream 데이터 접근
+
+**Why:** Eager execution에서는 데이터를 즉시 생성하므로, 이를 state로 보관하는 것이 자연스러움.
+
+---
+
+### 2.4.4. 왜 On-Demand Caching인가?
+
+**v1.0 문제:**
+- 모든 step 자동 캐싱
+- 높은 메모리 사용량
+
+**v2.0 해결:**
+- `record_output=True`로 선택적 캐싱
+- Cache inheritance로 downstream 접근
+- 메모리 사용량 감소
+
+**Why:** 대부분의 중간 결과는 재사용 안 함 → 필요한 것만 캐싱
+
+---
+
+### 2.4.5. 왜 Type-Aware System인가?
+
+**문제:**
+- v1.0은 타입 없음 → 잘못된 연산 런타임 에러
+- Forward-fill 전략을 하드코딩
+
+**해결:**
+- 각 데이터에 타입 명시 (numeric, group, weight, etc.)
+- data.yaml에서 타입 정의 → 자동 처리
+- BaseOperator가 타입 검증
+
+**Why:** 조기 에러 발견 + 자동화된 데이터 처리
+
+---
+
+### 2.4.6. 왜 Config-Driven Design인가?
+
+**Before (Hardcoded):**
+```python
+# 코드에 하드코딩
+if field_name == 'fnguide_industry_group':
+    data = data.ffill()  # Forward fill
+    data = data.astype('category')
+```
+
+**After (Config-Driven):**
+```yaml
+# preprocessing.yaml
+group:
+  forward_fill: true
+```
+
+**장점:**
+1. **유연성:** 코드 변경 없이 동작 변경
+2. **명확성:** 모든 설정이 한 곳에
+3. **확장성:** 새 field 추가 = YAML 추가
+
+---
+
+### 2.4.7. 왜 List[CachedStep]인가?
+
+Dict는 step collision 발생 → List로 해결
+
+---
+
+### 2.4.8. 왜 Single Masking인가?
+
+Field가 OUTPUT mask 적용 → 모든 operator input은 이미 masked → 중복 masking 불필요
+
+---
+
+### 2.4.9. 왜 DataModel Parent Class인가?
+
+UniverseMask와 AlphaData가 공통 속성 공유 (시간/자산 축 메타데이터) → DRY principle
+
+---
+
+## 2.5. 구현 단계 (참고)
+
+### Phase 1: Core Components
+1. DataModel (parent class)
+2. ConfigManager (4 YAML files)
+3. AlphaData (with List[CachedStep])
+4. BaseOperator
+5. UniverseMask
+6. FieldLoader
+
+### Phase 2: Operators
+1. Time-series operators
+2. Cross-section operators
+3. Group operators (NumPy 최적화)
+4. Arithmetic/Logical operators
+5. ConcatGroups
+
+### Phase 3: Facade & Registry
+1. OperatorRegistry (auto-discovery)
+2. ScalerManager (with params)
+3. AlphaExcel facade
+4. Long/short return methods
+
+### Phase 4: Testing & Migration
+1. v1.0 테스트 → v2.0 전환
+2. Performance benchmarking
+3. Documentation
+
+---
+
+## 2.6. 참고 문서
+
+- **PRD**: `docs/vibe_coding/alpha-excel/ae2-prd.md` - Requirements and workflows
+- **Transition Plan**: `docs/vibe_coding/alpha-excel/ae2-transition-plan.md` - v1.0 problems and solutions
+- **Group Operations**: `docs/research/faster-group-operations.md` - NumPy scatter-gather details
+- **v1.0 Architecture**: `docs/vibe_coding/alpha-excel/ae-architecture.md` - For comparison
