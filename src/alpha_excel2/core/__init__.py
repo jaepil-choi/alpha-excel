@@ -6,6 +6,7 @@ from .data_model import DataModel
 from .config_manager import ConfigManager
 from .alpha_data import AlphaData, CachedStep
 from .universe_mask import UniverseMask
+from .field_loader import FieldLoader
 
 __all__ = [
     'DataType',
@@ -14,7 +15,5 @@ __all__ = [
     'AlphaData',
     'CachedStep',
     'UniverseMask',
+    'FieldLoader',
 ]
-
-# Will be added as implemented:
-# from .field_loader import FieldLoader
