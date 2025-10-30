@@ -319,27 +319,107 @@ BaseOperator (ABC)
     └── And, Or, Not
 ```
 
-#### 2. Type Declaration (Class Attributes)
+#### 2. Finer-Grained Dependency Injection
+
+**Design Rationale:**
+- Interface Segregation Principle: Operators depend ONLY on what they need
+- Lower coupling: No dependency on AlphaExcel facade
+- Better testability: Can test operators with minimal setup
+- Explicit dependencies: Clear what each operator requires
 
 ```python
 class BaseOperator(ABC):
-    """Base class for all operators."""
+    """Base class for all operators with explicit dependencies.
+
+    Operators receive only what they need:
+    - universe_mask: For applying output masking
+    - config_manager: For reading operator-specific configs
+    - registry: For operator composition (optional, set by OperatorRegistry)
+    """
 
     input_types: List[str] = ['numeric']  # Expected input types
     output_type: str = 'numeric'          # Output type
     prefer_numpy: bool = False
 
+    def __init__(self,
+                 universe_mask: UniverseMask,
+                 config_manager: ConfigManager,
+                 registry: Optional['OperatorRegistry'] = None):
+        """Initialize operator with required dependencies.
+
+        Args:
+            universe_mask: For applying output masking
+            config_manager: For reading operator-specific configs
+            registry: For operator composition (set by OperatorRegistry)
+        """
+        self._universe_mask = universe_mask
+        self._config_manager = config_manager
+        self._registry = registry  # Can be None initially
+
     def __call__(self, *inputs, record_output=False, **params) -> AlphaData:
+        """6-Step Pipeline with explicit dependencies."""
         # 1. Validate types
-        # 2. Extract data
-        # 3. compute()
-        # 4. OUTPUT mask
+        self._validate_types(inputs)
+
+        # 2. Extract data (DataFrame or numpy array)
+        data_list = [self._extract_data(inp) for inp in inputs]
+
+        # 3. Compute (subclass implements)
+        result_data = self.compute(*data_list, **params)
+
+        # 4. Apply OUTPUT mask (direct access)
+        result_data = self._universe_mask.apply_mask(result_data)
+
         # 5. Inherit cache
+        inherited_cache = self._inherit_caches(inputs)
+
         # 6. Construct AlphaData
-        ...
+        step_counter = self._compute_step_counter(inputs)
+        return AlphaData(
+            data=result_data,
+            data_type=self.output_type,
+            step_counter=step_counter,
+            cached=record_output,
+            cache=inherited_cache
+        )
 
     @abstractmethod
-    def compute(self, *data, **params): ...
+    def compute(self, *data, **params):
+        """Pure computation logic (subclass implements)."""
+        pass
+
+    def _validate_types(self, inputs: Tuple[AlphaData, ...]):
+        """Check input types match expected types."""
+        if len(inputs) != len(self.input_types):
+            raise TypeError(f"Expected {len(self.input_types)} inputs, got {len(inputs)}")
+
+        for i, (inp, expected_type) in enumerate(zip(inputs, self.input_types)):
+            if inp._data_type != expected_type:
+                raise TypeError(
+                    f"Input {i}: expected {expected_type}, got {inp._data_type}"
+                )
+
+    def _extract_data(self, alpha_data: AlphaData):
+        """Extract DataFrame or numpy array based on prefer_numpy."""
+        if self.prefer_numpy:
+            return alpha_data.to_numpy()
+        return alpha_data.to_df()
+```
+
+**Operator Composition Example:**
+```python
+class TsZscore(BaseOperator):
+    """Example showing registry usage for composition."""
+
+    def __call__(self, data: AlphaData, window: int, **kwargs) -> AlphaData:
+        if self._registry is None:
+            raise RuntimeError("Registry not set - cannot perform composition")
+
+        # Use registry for composition
+        mean = self._registry.ts_mean(data, window=window)
+        std = self._registry.ts_std(data, window=window)
+        zscore = (data - mean) / std
+        return zscore
 ```
 
 #### 3. Cache Inheritance Logic
@@ -379,22 +459,37 @@ def _compute_step_counter(self, inputs: Tuple[AlphaData, ...]) -> int:
 
 **역할:** 모든 operator를 method로 제공하는 통합 레지스트리. Import 불필요.
 
-#### 1. Auto-Discovery 메커니즘
+#### 1. Auto-Discovery with Explicit Dependencies
+
+**Design Rationale:**
+- Registry receives dependencies (universe_mask, config_manager)
+- Passes these to operators during instantiation
+- Sets registry reference after instantiation (circular dependency handling)
+- No dependency on AlphaExcel facade
 
 ```python
 import inspect
 from alpha_excel.ops import timeseries, crosssection, group, arithmetic, logical
 
 class OperatorRegistry:
-    """Registry for all operators with method-based access."""
+    """Registry with explicit dependencies for operator instantiation."""
 
-    def __init__(self, alpha_excel: 'AlphaExcel'):
-        self._ae = alpha_excel
+    def __init__(self,
+                 universe_mask: UniverseMask,
+                 config_manager: ConfigManager):
+        """Initialize registry with operator dependencies.
+
+        Args:
+            universe_mask: Passed to all operators for masking
+            config_manager: Passed to all operators for configs
+        """
+        self._universe_mask = universe_mask
+        self._config_manager = config_manager
         self._operators: Dict[str, BaseOperator] = {}
         self._discover_operators()
 
     def _discover_operators(self):
-        """Auto-discover all BaseOperator subclasses."""
+        """Auto-discover and instantiate operators with dependencies."""
         modules = [timeseries, crosssection, group, arithmetic, logical]
 
         for module in modules:
@@ -403,8 +498,17 @@ class OperatorRegistry:
                     # Convert CamelCase to snake_case
                     method_name = self._camel_to_snake(name)
 
-                    # Instantiate operator
-                    self._operators[method_name] = obj(self._ae, self)
+                    # Instantiate with explicit dependencies
+                    operator_instance = obj(
+                        universe_mask=self._universe_mask,
+                        config_manager=self._config_manager,
+                        registry=None  # Set later to avoid circular dependency
+                    )
+
+                    # Now set registry reference for composition
+                    operator_instance._registry = self
+
+                    self._operators[method_name] = operator_instance
 
     def _camel_to_snake(self, name: str) -> str:
         """TsMean → ts_mean, GroupNeutralize → group_neutralize"""
@@ -451,12 +555,24 @@ class TsZscore(BaseOperator):
 
 ### E. AlphaExcel (Facade)
 
-**역할:** 시스템의 단일 진입점. 모든 컴포넌트를 소유하고 초기화.
+**역할:** 시스템의 단일 진입점이자 Dependency Coordinator. 컴포넌트를 생성하고 의존성을 명시적으로 주입.
 
-#### 초기화 순서
+**Design Rationale:**
+- Facade pattern retained, but role changed from "component container" to "dependency coordinator"
+- Components receive only what they need (finer-grained DI)
+- Components don't know about facade - lower coupling
+- Cleaner separation of concerns
+
+#### 초기화 순서 (Dependency Coordinator)
 
 ```python
 class AlphaExcel:
+    """Lightweight facade that wires dependencies.
+
+    Facade creates components and injects dependencies explicitly.
+    Components don't depend on AlphaExcel - only on specific dependencies.
+    """
+
     def __init__(self, start_time, end_time, universe=None, config_path='config'):
         # 1. Timestamps
         self._start_time = pd.Timestamp(start_time)
@@ -468,14 +584,21 @@ class AlphaExcel:
         # 3. DataSource
         self._data_source = DataSource(config_path)
 
-        # 4. UniverseMask (before FieldLoader)
+        # 4. UniverseMask (before others need it)
         self._universe_mask = self._initialize_universe(universe)
 
-        # 5. FieldLoader
-        self._field_loader = FieldLoader(self._data_source, self)
+        # 5. FieldLoader (inject dependencies explicitly)
+        self._field_loader = FieldLoader(
+            data_source=self._data_source,
+            universe_mask=self._universe_mask,
+            config_manager=self._config_manager
+        )
 
-        # 6. OperatorRegistry
-        self._ops = OperatorRegistry(self)
+        # 6. OperatorRegistry (inject dependencies explicitly)
+        self._ops = OperatorRegistry(
+            universe_mask=self._universe_mask,
+            config_manager=self._config_manager
+        )
 
         # 7. ScalerManager
         self._scaler_manager = ScalerManager()
@@ -527,17 +650,40 @@ def to_short_returns(self, weights: AlphaData) -> AlphaData:
 
 **역할:** DataSource에서 field를 로딩하고 타입별 변환 적용. ConfigManager를 통해 data.yaml 읽기.
 
-#### Loading Pipeline
+**Design Rationale:**
+- Depends only on: DataSource, UniverseMask, ConfigManager
+- No dependency on AlphaExcel facade
+- Can be tested independently with mocked dependencies
+
+#### Loading Pipeline with Explicit Dependencies
 
 ```python
 class FieldLoader:
-    def __init__(self, data_source, alpha_excel):
+    """Field loader with explicit dependencies.
+
+    Receives only what it needs for field loading:
+    - data_source: For loading field data
+    - universe_mask: For applying output masking
+    - config_manager: For reading field configs and preprocessing rules
+    """
+
+    def __init__(self,
+                 data_source: DataSource,
+                 universe_mask: UniverseMask,
+                 config_manager: ConfigManager):
+        """Initialize field loader.
+
+        Args:
+            data_source: For loading field data
+            universe_mask: For applying output masking
+            config_manager: For reading field configs and preprocessing rules
+        """
         self._ds = data_source
-        self._ae = alpha_excel
-        self._config_manager = alpha_excel._config_manager
+        self._universe_mask = universe_mask
+        self._config_manager = config_manager
         self._cache: Dict[str, AlphaData] = {}  # Field cache
 
-    def load(self, name: str) -> AlphaData:
+    def load(self, name: str, start_time=None, end_time=None) -> AlphaData:
         """
         6-Step Pipeline:
         1. Check cache
@@ -553,26 +699,41 @@ class FieldLoader:
 
         # Step 2
         field_config = self._config_manager.get_field_config(name)
-        data_df = self._ds.load_field(name, ...)
+        if not field_config:
+            raise ValueError(f"Field '{name}' not found in data.yaml")
+
+        data_df = self._ds.load_field(name, start_time, end_time)
 
         # Step 3
-        preprocessing_config = self._config_manager.get_preprocessing_config(field_config['data_type'])
-        if preprocessing_config.get('forward_fill'):
+        data_type = field_config.get('data_type', 'numeric')
+        preprocessing_config = self._config_manager.get_preprocessing_config(data_type)
+
+        if preprocessing_config.get('forward_fill', False):
             data_df = data_df.ffill()
 
         # Step 4
-        if field_config['data_type'] == 'group':
+        if data_type == 'group':
             data_df = data_df.astype('category')
 
-        # Step 5 (OUTPUT MASK only)
-        data_df = self._ae._universe_mask.apply_mask(data_df)
+        # Step 5 (OUTPUT MASK - direct access)
+        data_df = self._universe_mask.apply_mask(data_df)
 
         # Step 6
-        alpha_data = AlphaData(data=data_df, data_type=field_config['data_type'],
-                               step_counter=0, cached=True, cache=[])
+        alpha_data = AlphaData(
+            data=data_df,
+            data_type=data_type,
+            step_counter=0,
+            cached=True,
+            cache=[],
+            step_history=[{'step': 0, 'expr': f'Field({name})', 'op': 'field'}]
+        )
 
         self._cache[name] = alpha_data
         return alpha_data
+
+    def clear_cache(self):
+        """Clear field cache."""
+        self._cache.clear()
 ```
 
 ---
@@ -600,10 +761,10 @@ class UniverseMask(DataModel):
         return data.where(self._data, np.nan)
 ```
 
-**Integration Points:**
-- FieldLoader: `data_df = self._ae._universe_mask.apply_mask(data_df)`
-- BaseOperator: `result_data = self._ae._universe_mask.apply_mask(result_data)`
-- Backtesting: `weights_masked = self._ae._universe_mask.apply_mask(weights_shifted)`
+**Integration Points (with Finer-Grained DI):**
+- FieldLoader: `data_df = self._universe_mask.apply_mask(data_df)` (direct access via constructor)
+- BaseOperator: `result_data = self._universe_mask.apply_mask(result_data)` (direct access via constructor)
+- Backtesting: AlphaExcel methods access `self._universe_mask.apply_mask(weights_shifted)` directly
 
 ---
 
@@ -1023,33 +1184,181 @@ UniverseMask와 AlphaData가 공통 속성 공유 (시간/자산 축 메타데�
 
 ---
 
-## 2.5. 구현 단계 (참고)
+### 2.4.10. 왜 Finer-Grained Dependency Injection인가?
 
-### Phase 1: Core Components
-1. DataModel (parent class)
-2. ConfigManager (4 YAML files)
-3. AlphaData (with List[CachedStep])
-4. BaseOperator
-5. UniverseMask
-6. FieldLoader
+**문제 (Facade Dependency):**
+- 초기 v2.0 설계: 모든 operator가 AlphaExcel facade 참조
+- Facade 내부 구조 변경 시 모든 operator 영향받음
+- **Interface Segregation Principle (ISP) 위반:** Operator가 필요하지 않은 facade 전체에 의존
+- **Operator 단독 테스트 어려움:** Facade 없이는 operator 테스트 불가
+- **Phased implementation 불가능:** Facade 없이는 operator 구현 불가 (순환 의존성)
+- **Higher coupling:** Component들이 facade 내부 구조에 결합
 
-### Phase 2: Operators
-1. Time-series operators
-2. Cross-section operators
-3. Group operators (NumPy 최적화)
-4. Arithmetic/Logical operators
-5. ConcatGroups
+**해결 (Finer-Grained DI):**
+
+Components receive ONLY what they need:
+- **BaseOperator needs:** `universe_mask` (masking), `config_manager` (configs), `registry` (composition - optional)
+- **FieldLoader needs:** `data_source` (data), `universe_mask` (masking), `config_manager` (configs)
+- **OperatorRegistry needs:** `universe_mask`, `config_manager` (to pass to operators)
+- **AlphaExcel becomes:** Dependency coordinator that wires components
+
+**장점:**
+
+1. **Interface Segregation Principle:** 필요한 것만 의존
+   ```python
+   # Before: Operator depends on entire facade
+   class TsMean(BaseOperator):
+       def __init__(self, alpha_excel):
+           self._ae = alpha_excel  # Has everything, needs only universe_mask
+
+   # After: Operator depends only on what it needs
+   class TsMean(BaseOperator):
+       def __init__(self, universe_mask, config_manager, registry=None):
+           self._universe_mask = universe_mask
+           self._config_manager = config_manager
+           self._registry = registry
+   ```
+
+2. **Lower Coupling:** Components don't know about facade
+   - Facade 구조 변경해도 components 영향 없음
+   - Components는 stable interface에만 의존
+
+3. **Better Testability:** 최소한의 setup으로 테스트 가능
+   ```python
+   # Test operator without facade
+   mask = UniverseMask(...)
+   config = ConfigManager(...)
+   operator = TsMean(mask, config)
+   result = operator(alpha_data)
+   ```
+
+4. **Phased Implementation:** Facade 없이도 component 구현 가능
+   - Phase 1: Core components (types, data_model, config, alpha_data, universe_mask)
+   - Phase 1.5: Operator infrastructure (base_operator, field_loader) ← Can implement now!
+   - Phase 2: Concrete operators
+   - Phase 3: Facade & Registry
+
+5. **Explicit Dependencies:** 각 component의 요구사항 명확
+   - Constructor signature가 dependencies 명시
+   - 무엇을 필요로 하는지 한눈에 파악
+
+**Trade-off:**
+
+❌ **Wiring이 조금 더 복잡:**
+```python
+# Before: 1 argument
+operator = TsMean(alpha_excel)
+
+# After: 3 arguments
+operator = TsMean(universe_mask, config_manager, registry)
+```
+
+✅ **하지만 AlphaExcel facade가 wiring 담당하므로 사용자는 영향 없음:**
+```python
+# User code is the same
+ae = AlphaExcel(...)
+o = ae.ops
+result = o.ts_mean(data, window=5)  # No difference for users!
+```
+
+✅ **장기적으로 유지보수 더 쉬움:**
+- Facade 변경 → Components 영향 없음
+- Components 독립적으로 테스트 가능
+- 명확한 dependency graph
+
+**결론:** Lower coupling과 testability가 wiring 편의성보다 중요. SOLID principles 준수.
+
+---
+
+## 2.5. 구현 단계 (Revised with Finer-Grained DI)
+
+### Phase 1: Core Foundation (COMPLETE ✅)
+**Dependencies:** None (standalone components)
+
+1. ✅ Types (types.py) - DataType constants
+2. ✅ DataModel (data_model.py) - Parent class
+3. ✅ ConfigManager (config_manager.py) - 4 YAML file loader
+4. ✅ AlphaData (alpha_data.py) - Stateful data model with List[CachedStep]
+5. ✅ UniverseMask (universe_mask.py) - Single output masking
+6. ✅ Project structure - Directories and __init__.py files
+
+**Status:** 73 tests passing, committed
+
+---
+
+### Phase 1.5: Operator Infrastructure (IN PROGRESS)
+**Dependencies:** Phase 1 components (universe_mask, config_manager, alpha_data)
+
+**Design Rationale:** With finer-grained DI, we can now implement operator infrastructure WITHOUT the facade!
+
+1. preprocessing.yaml - Type-based preprocessing config
+2. BaseOperator (ops/base.py) - Abstract base with `__init__(universe_mask, config_manager, registry=None)`
+3. FieldLoader (core/field_loader.py) - Field loading with `__init__(data_source, universe_mask, config_manager)`
+4. Phase 1.5 integration test - End-to-end validation
+
+**Note:** MockDataSource used for testing (real DataSource wired in Phase 3)
+
+**Estimated:** ~77 new tests, 4-6 hours implementation
+
+---
+
+### Phase 2: Concrete Operators
+**Dependencies:** Phase 1.5 (base_operator)
+
+All operators inherit from BaseOperator and receive `(universe_mask, config_manager, registry=None)`:
+
+1. **Time-series operators:**
+   - TsMean, TsStd, TsRank
+   - TsMax, TsMin, TsSum
+   - TsCorr, TsCovariance
+
+2. **Cross-section operators:**
+   - Rank, Demean, Scale
+
+3. **Group operators (NumPy optimized):**
+   - GroupNeutralize, GroupRank
+   - GroupSum, GroupMean
+   - ConcatGroups, LabelQuantile
+
+4. **Arithmetic/Logical operators:**
+   - Add, Sub, Mul, Div, Pow, Abs, Log
+   - Greater, Less, Equal, And, Or, Not
+
+**Note:** Operators can be implemented and tested independently without facade
+
+---
 
 ### Phase 3: Facade & Registry
-1. OperatorRegistry (auto-discovery)
-2. ScalerManager (with params)
-3. AlphaExcel facade
-4. Long/short return methods
+**Dependencies:** Phase 2 (concrete operators)
+
+**Design:** AlphaExcel as dependency coordinator
+
+1. **OperatorRegistry (operator_registry.py):**
+   - Auto-discovery with `__init__(universe_mask, config_manager)`
+   - Instantiates operators: `Operator(universe_mask, config_manager, registry=None)`
+   - Sets registry reference after instantiation: `operator._registry = self`
+
+2. **AlphaExcel (alpha_excel.py):**
+   - Dependency coordinator role
+   - Wires components: `FieldLoader(data_source, universe_mask, config_manager)`
+   - Wires registry: `OperatorRegistry(universe_mask, config_manager)`
+
+3. **ScalerManager:**
+   - Weight scaler management with params
+
+4. **Backtesting methods:**
+   - to_weights(), to_portfolio_returns()
+   - to_long_returns(), to_short_returns()
+
+**Key Benefit:** Facade is thin coordinator layer, not tightly coupled container
+
+---
 
 ### Phase 4: Testing & Migration
-1. v1.0 테스트 → v2.0 전환
+1. v1.0 workflows → v2.0 migration
 2. Performance benchmarking
-3. Documentation
+3. Documentation updates
+4. Showcase examples
 
 ---
 
