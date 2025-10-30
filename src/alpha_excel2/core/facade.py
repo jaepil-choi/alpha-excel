@@ -123,8 +123,44 @@ class AlphaExcel:
                 f"start_time ({self._start_time})"
             )
 
+    def _load_returns(self) -> pd.DataFrame:
+        """Load returns field with buffer for universe creation.
+
+        Applies buffer_days from settings.yaml to load ~1 year of historical data.
+        This ensures sufficient data for rolling operations and forward-fill.
+
+        Returns:
+            Returns DataFrame (T, N) - RAW data before universe masking
+
+        Note:
+            This is called BEFORE UniverseMask is created, so no masking is applied.
+            The raw returns data is used to derive the default universe mask.
+        """
+        # Get buffer_days from settings (default: 252 trading days ~= 1 year)
+        buffer_days = self._config_manager.get_setting('data_loading.buffer_days', default=252)
+
+        # Calculate buffered start time
+        # Approximate: 252 trading days ~= 365 calendar days, use 1.5x factor for safety
+        buffered_start = self._start_time - pd.Timedelta(days=int(buffer_days * 1.5))
+
+        # Load returns field directly from DataSource
+        # We bypass FieldLoader because it requires UniverseMask, which we're creating
+        # Note: DataSource expects start_date/end_date as strings
+        end_date_str = self._end_time.strftime('%Y-%m-%d') if self._end_time else pd.Timestamp.now().strftime('%Y-%m-%d')
+        returns_df = self._data_source.load_field(
+            'returns',
+            start_date=buffered_start.strftime('%Y-%m-%d'),
+            end_date=end_date_str
+        )
+
+        return returns_df
+
     def _initialize_universe(self, universe: Optional[pd.DataFrame]) -> UniverseMask:
-        """Initialize UniverseMask from user parameter or create default.
+        """Initialize UniverseMask from user parameter or derive from returns.
+
+        When universe=None, loads returns data and creates universe mask where
+        returns are not NaN. This follows the v1.0 pattern of deriving universe
+        from actual data availability.
 
         Args:
             universe: Optional user-provided universe DataFrame
@@ -136,16 +172,24 @@ class AlphaExcel:
             TypeError: If universe is not None and not a DataFrame
         """
         if universe is None:
-            # Create default all-True universe
-            # Start with minimal 1x1 universe (will expand on first field load)
-            default_data = pd.DataFrame(
-                [[True]],
-                index=pd.DatetimeIndex([self._start_time]),
-                columns=['_default']
-            )
-            return UniverseMask(default_data)
+            # Load returns FIRST (mandatory for default universe)
+            # This ensures universe has the correct shape from actual data
+            returns_data = self._load_returns()
 
-        # Validate universe type
+            # Create universe from returns: True where returns exist (not NaN)
+            universe_mask = ~returns_data.isna()
+
+            # Filter to requested date range
+            if self._end_time is not None:
+                mask_dates = (universe_mask.index >= self._start_time) & (universe_mask.index <= self._end_time)
+            else:
+                mask_dates = universe_mask.index >= self._start_time
+
+            universe_mask = universe_mask.loc[mask_dates]
+
+            return UniverseMask(universe_mask)
+
+        # Validate custom universe type
         if not isinstance(universe, pd.DataFrame):
             raise TypeError(
                 f"universe must be a pandas DataFrame, got {type(universe).__name__}"
