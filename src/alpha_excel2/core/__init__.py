@@ -8,6 +8,7 @@ from .alpha_data import AlphaData, CachedStep
 from .universe_mask import UniverseMask
 from .field_loader import FieldLoader
 from .operator_registry import OperatorRegistry
+from .facade import AlphaExcel
 
 __all__ = [
     'DataType',
@@ -18,4 +19,5 @@ __all__ = [
     'UniverseMask',
     'FieldLoader',
     'OperatorRegistry',
+    'AlphaExcel',
 ]

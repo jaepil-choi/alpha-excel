@@ -1486,27 +1486,43 @@ print(o.list_operators())
 
 ---
 
-#### Phase 3.4: AlphaExcel Facade (Core)
+#### Phase 3.4: AlphaExcel Facade (Core) (COMPLETE ✅)
 **Dependencies:** Phase 3.3 (OperatorRegistry), Phase 1-2 (core components)
-**Estimated Tests:** ~20 tests
+**Tests:** 29 tests passing
 
-**Components:**
-1. **AlphaExcel Facade** (`core/facade.py`)
+**Components Implemented:**
+1. ✅ **AlphaExcel Facade** (`core/facade.py`)
    - Dependency coordinator initialization order:
-     1. Timestamps (start_time, end_time)
+     1. Timestamps (start_time - REQUIRED, end_time - OPTIONAL, None = latest data)
      2. ConfigManager (FIRST - others depend on it)
      3. DataSource
-     4. UniverseMask
-     5. FieldLoader (inject: data_source, universe_mask, config_manager)
+     4. UniverseMask (default 1x1, or custom provided)
+     5. FieldLoader (inject: data_source, universe_mask, config_manager, default dates)
      6. OperatorRegistry (inject: universe_mask, config_manager)
    - Property accessors:
-     - `ae.field` → FieldLoader.load
+     - `ae.field` → FieldLoader.load (with default date range)
      - `ae.ops` → OperatorRegistry
+   - Date handling: end_time=None loads to latest available data
    - **NO backtesting methods yet** (Phase 3.5)
+
+**Implementation Details:**
+- FieldLoader extended to accept default_start_time and default_end_time
+- Dates automatically applied when field is loaded without explicit dates
+- Universe masking applied at both field loading and operator output
+- All 29 tests covering initialization, properties, helpers, and integration
+
+**Tests Breakdown (29 tests):**
+- Part 1: Constructor tests (10 tests) - Initialization with various parameters
+- Part 2: Property accessors (6 tests) - `ae.field` and `ae.ops` functionality
+- Part 3: Helper methods (5 tests) - Universe and date validation
+- Part 4: Integration (8 tests) - End-to-end workflows with field loading and operators
 
 **Files:**
 - `src/alpha_excel2/core/facade.py`
+- `src/alpha_excel2/core/field_loader.py` (updated for default dates)
 - `tests/test_alpha_excel2/test_core/test_facade.py`
+
+**Status:** Committed (Next: Phase 3.5 Backtesting Methods)
 
 ---
 
@@ -1561,11 +1577,15 @@ print(o.list_operators())
 ---
 
 **Phase 3 Summary:**
-- **Total Estimated Tests:** ~125 new tests
-- **Current Status:** Phase 3.1 ✅ (25 tests), Phase 3.2 ✅ (15 tests), Phase 3.3 ✅ (26 tests) - 66 tests passing
-- **Total Tests After Phase 3.1+3.2+3.3:** 231 tests (165 Phase 1+1.5+2 + 66 Phase 3.1+3.2+3.3)
-- **Remaining:** Phase 3.4-3.6 (~59 estimated tests)
-- **Implementation Order:** 3.1 ✅ → 3.2 ✅ → 3.3 ✅ → 3.4 → 3.5 → 3.6 (sequential)
+- **Total Tests So Far:** 95 tests (Phase 3.1-3.4)
+- **Current Status:**
+  - Phase 3.1 ✅ (25 tests) - Portfolio Scalers
+  - Phase 3.2 ✅ (15 tests) - ScalerManager
+  - Phase 3.3 ✅ (26 tests) - OperatorRegistry
+  - Phase 3.4 ✅ (29 tests) - AlphaExcel Facade (Core)
+- **Total Tests Passing:** 260 tests (165 Phase 1+1.5+2 + 95 Phase 3.1-3.4)
+- **Remaining:** Phase 3.5 (Backtesting ~25 tests), Phase 3.6 (Integration ~20 tests)
+- **Implementation Order:** 3.1 ✅ → 3.2 ✅ → 3.3 ✅ → 3.4 ✅ → 3.5 → 3.6 (sequential)
 - **Key Benefit:** Facade is thin coordinator layer, not tightly coupled container
 
 ---

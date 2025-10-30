@@ -35,17 +35,23 @@ class FieldLoader:
     def __init__(self,
                  data_source,  # DataSource or MockDataSource
                  universe_mask: UniverseMask,
-                 config_manager: ConfigManager):
+                 config_manager: ConfigManager,
+                 default_start_time=None,
+                 default_end_time=None):
         """Initialize field loader.
 
         Args:
             data_source: For loading field data (DataSource or MockDataSource)
             universe_mask: For applying output masking
             config_manager: For reading field configs and preprocessing rules
+            default_start_time: Default start date if not specified in load()
+            default_end_time: Default end date if not specified in load()
         """
         self._ds = data_source
         self._universe_mask = universe_mask
         self._config_manager = config_manager
+        self._default_start_time = default_start_time
+        self._default_end_time = default_end_time
         self._cache: Dict[str, AlphaData] = {}  # Field cache
 
     def load(self, name: str, start_time=None, end_time=None) -> AlphaData:
@@ -61,8 +67,8 @@ class FieldLoader:
 
         Args:
             name: Field name to load
-            start_time: Optional start date for filtering
-            end_time: Optional end date for filtering
+            start_time: Optional start date for filtering (uses default if None)
+            end_time: Optional end date for filtering (uses default if None)
 
         Returns:
             AlphaData with field data
@@ -70,6 +76,12 @@ class FieldLoader:
         Raises:
             ValueError: If field not found in data.yaml
         """
+        # Use defaults if not provided
+        if start_time is None:
+            start_time = self._default_start_time
+        if end_time is None:
+            end_time = self._default_end_time
+
         # Step 1: Check cache
         cache_key = f"{name}_{start_time}_{end_time}"
         if cache_key in self._cache:
