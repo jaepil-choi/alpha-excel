@@ -1307,28 +1307,35 @@ result = o.ts_mean(data, window=5)  # No difference for users!
 
 ---
 
-### Phase 2: Concrete Operators
+### Phase 2: Concrete Operators (IN PROGRESS - 29/29 tests passing)
 **Dependencies:** Phase 1.5 (base_operator)
+
+**Scope:** Phase 2 implements **representative operators only** to validate the operator infrastructure. Additional operators will be implemented after Phase 3 (Facade & Registry) is complete.
 
 All operators inherit from BaseOperator and receive `(universe_mask, config_manager, registry=None)`:
 
 1. **Time-series operators:**
-   - TsMean, TsStd, TsRank
-   - TsMax, TsMin, TsSum
-   - TsCorr, TsCovariance
+   - ✅ TsMean (11 tests) - Committed
+   - TsStd, TsRank - After Phase 3
+   - TsMax, TsMin, TsSum - After Phase 3
+   - TsCorr, TsCovariance - After Phase 3
 
 2. **Cross-section operators:**
-   - Rank, Demean, Scale
+   - ✅ Rank (8 tests) - Committed
+   - Demean, Scale - After Phase 3
 
-3. **Group operators (NumPy optimized):**
-   - GroupNeutralize, GroupRank
-   - GroupSum, GroupMean
-   - ConcatGroups, LabelQuantile
+3. **Group operators:**
+   - ✅ GroupRank (10 tests) - Committed (uses pandas groupby for Phase 2)
+   - GroupNeutralize (NumPy optimized) - After Phase 3
+   - GroupSum, GroupMean - After Phase 3
+   - ConcatGroups, LabelQuantile - After Phase 3
 
 4. **Arithmetic/Logical operators:**
-   - Add, Sub, Mul, Div, Pow, Abs, Log
-   - Greater, Less, Equal, And, Or, Not
+   - ✅ Arithmetic operators implemented via AlphaData magic methods (Phase 1)
+   - Comparison operators (>, <, >=, <=, ==, !=) - After Phase 3 with logical operators
+   - Logical operators (And, Or, Not) - After Phase 3
 
+**Status:** 165 tests total (73 Phase 1 + 63 Phase 1.5 + 29 Phase 2)
 **Note:** Operators can be implemented and tested independently without facade
 
 ---
