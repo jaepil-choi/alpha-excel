@@ -1431,22 +1431,58 @@ Phase 3.6 (Integration) ────┘
 
 ---
 
-#### Phase 3.3: OperatorRegistry
-**Dependencies:** Phase 2 operators (TsMean, Rank, GroupRank - already exist)
-**Estimated Tests:** ~20 tests
+#### Phase 3.3: OperatorRegistry (COMPLETE ✅)
+**Dependencies:** Phase 2 operators (TsMean, Rank, GroupRank)
+**Tests:** 26 tests passing
 
-**Components:**
+**Components Implemented:**
 1. **OperatorRegistry** (`core/operator_registry.py`)
-   - Auto-discovery of BaseOperator subclasses
-   - CamelCase → snake_case conversion (TsMean → ts_mean)
+   - Auto-discovery: Scans all modules in `ops/` directory dynamically
+   - Category tracking: Stores module name for each operator (timeseries, crosssection, group)
+   - Name conversion: CamelCase → snake_case with collision detection (TsMean → ts_mean)
    - Instantiate operators: `Operator(universe_mask, config_manager, registry=None)`
-   - Set registry reference: `operator._registry = self`
-   - Method dispatch via `__getattr__` for `o.ts_mean()` syntax
-   - `list_operators()` - List all available operators
+   - Set registry reference: `operator._registry = self` (circular dependency handling)
+   - Method dispatch: `__getattr__` enables `o.ts_mean()` syntax
+   - `list_operators()` - Returns sorted list with categories: "ts_mean (timeseries)"
+   - `list_operators_by_category()` - Returns dict grouped by category
+   - Error handling: RuntimeError on name collision, warning on empty modules
+
+**Implementation Details:**
+- Dynamic module scanning using `importlib` and `inspect`
+- Regex-based CamelCase → snake_case conversion handles edge cases
+- Detects duplicate operator names before registration
+- Logs warning for modules with no operators (continues processing)
+- Operators receive finer-grained dependencies (universe_mask, config_manager, registry)
+- Registry reference set after instantiation to avoid circular dependency
+
+**Method-Based API:**
+```python
+o = ae.ops  # After Phase 3.4 integration
+ma5 = o.ts_mean(returns, window=5)
+ranked = o.rank(ma5)
+sector_ranked = o.group_rank(returns, sectors)
+
+# Discovery
+print(o.list_operators())
+# ['group_rank (group)', 'rank (crosssection)', 'ts_mean (timeseries)']
+```
+
+**Tests Breakdown (26 tests):**
+- Initialization and dependency storage (3 tests)
+- Auto-discovery of Phase 2 operators (5 tests)
+- Name conversion including edge cases (4 tests)
+- Name collision detection (2 tests)
+- Empty module warning tests (2 tests)
+- Method dispatch via __getattr__ (3 tests)
+- Dependency injection verification (3 tests)
+- Operator listing with categories (4 tests)
 
 **Files:**
-- `src/alpha_excel2/core/operator_registry.py`
-- `tests/test_alpha_excel2/test_core/test_operator_registry.py`
+- `src/alpha_excel2/core/operator_registry.py` (180 lines)
+- `tests/test_alpha_excel2/test_core/test_operator_registry.py` (424 lines, 26 tests)
+- `src/alpha_excel2/core/__init__.py` (added OperatorRegistry export)
+
+**Status:** Committed (a51d00f)
 
 ---
 
@@ -1526,10 +1562,10 @@ Phase 3.6 (Integration) ────┘
 
 **Phase 3 Summary:**
 - **Total Estimated Tests:** ~125 new tests
-- **Current Status:** Phase 3.1 ✅ (25 tests), Phase 3.2 ✅ (15 tests) - 40 tests passing
-- **Total Tests After Phase 3.1+3.2:** 205 tests (165 Phase 1+1.5+2 + 40 Phase 3.1+3.2)
-- **Remaining:** Phase 3.3-3.6 (~85 estimated tests)
-- **Implementation Order:** 3.1 ✅ → 3.2 ✅ → 3.3 → 3.4 → 3.5 → 3.6 (sequential)
+- **Current Status:** Phase 3.1 ✅ (25 tests), Phase 3.2 ✅ (15 tests), Phase 3.3 ✅ (26 tests) - 66 tests passing
+- **Total Tests After Phase 3.1+3.2+3.3:** 231 tests (165 Phase 1+1.5+2 + 66 Phase 3.1+3.2+3.3)
+- **Remaining:** Phase 3.4-3.6 (~59 estimated tests)
+- **Implementation Order:** 3.1 ✅ → 3.2 ✅ → 3.3 ✅ → 3.4 → 3.5 → 3.6 (sequential)
 - **Key Benefit:** Facade is thin coordinator layer, not tightly coupled container
 
 ---
