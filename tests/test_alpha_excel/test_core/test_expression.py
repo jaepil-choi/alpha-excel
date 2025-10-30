@@ -5,7 +5,7 @@ These tests follow TDD methodology - they define expected behavior before implem
 """
 
 import pytest
-from alpha_canvas.core.expression import Expression, Field
+from alpha_excel.core.expression import Expression, Field
 
 
 class TestExpression:
