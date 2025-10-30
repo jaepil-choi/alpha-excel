@@ -1286,19 +1286,24 @@ result = o.ts_mean(data, window=5)  # No difference for users!
 
 ---
 
-### Phase 1.5: Operator Infrastructure (IN PROGRESS)
+### Phase 1.5: Operator Infrastructure (COMPLETE ✅)
 **Dependencies:** Phase 1 components (universe_mask, config_manager, alpha_data)
 
 **Design Rationale:** With finer-grained DI, we can now implement operator infrastructure WITHOUT the facade!
 
-1. preprocessing.yaml - Type-based preprocessing config
-2. BaseOperator (ops/base.py) - Abstract base with `__init__(universe_mask, config_manager, registry=None)`
-3. FieldLoader (core/field_loader.py) - Field loading with `__init__(data_source, universe_mask, config_manager)`
-4. Phase 1.5 integration test - End-to-end validation
+1. ✅ preprocessing.yaml - Type-based preprocessing config
+2. ✅ BaseOperator (ops/base.py) - Abstract base with `__init__(universe_mask, config_manager, registry=None)`
+3. ✅ FieldLoader (core/field_loader.py) - Field loading with `__init__(data_source, universe_mask, config_manager)`
+4. ✅ MockDataSource (tests/mocks/) - Testing without real Parquet files
+5. ✅ Phase 1.5 integration test - End-to-end validation
 
-**Note:** MockDataSource used for testing (real DataSource wired in Phase 3)
+**Components Implemented:**
+- **BaseOperator:** 6-step pipeline (validate → extract → compute → mask → cache → wrap), 23 tests
+- **FieldLoader:** 6-step loading pipeline with type-aware preprocessing, 17 tests
+- **MockDataSource:** Mimics DataSource interface for isolated testing, 12 tests
+- **Integration Test:** 11 tests validating end-to-end workflows
 
-**Estimated:** ~77 new tests, 4-6 hours implementation
+**Status:** 136 tests passing (73 Phase 1 + 63 Phase 1.5), committed
 
 ---
 
