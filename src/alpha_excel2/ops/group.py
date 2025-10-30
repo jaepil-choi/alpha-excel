@@ -68,6 +68,11 @@ class GroupRank(BaseOperator):
                 lambda x: x.rank(method='average', pct=True)
             )
 
-            result.loc[idx] = ranked.values
+            # Assign ranked values back
+            # Handle empty results (all NaN case)
+            if ranked.empty or len(ranked) == 0:
+                result.loc[idx, :] = np.nan
+            else:
+                result.loc[idx, :] = ranked.values
 
         return result
