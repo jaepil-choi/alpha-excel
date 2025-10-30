@@ -604,10 +604,25 @@ Deferred to Post-Phase 3:
 
 This project follows **Conventional Commits** format. Always check recent commits with `git log --oneline -20` to follow established patterns.
 
-### Commit Format
+### Commit Message Format
 
+**Structure:**
 ```
-<type>: <description>
+<type>: <concise summary (imperative, <72 chars)>
+
+<blank line>
+
+<detailed description>
+- Bullet points for key changes
+- Implementation details
+- Test coverage
+- Design decisions
+
+<blank line>
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-Authored-By: Claude <noreply@anthropic.com>
 ```
 
 **Types:**
@@ -618,13 +633,34 @@ This project follows **Conventional Commits** format. Always check recent commit
 - `chore:` - Maintenance tasks (dependencies, configs)
 - `test:` - Test additions or modifications
 
-**Examples from this project:**
+**Real Example from this project:**
 ```
 feat: Implement GroupRank operator with comprehensive tests
-docs: Update ae2-architecture.md with Phase 2 progress
-fix: suppress FutureWarning in GrossNetScaler fillna operations
-refactor: reorganize tests/ to match package structure
-chore: update tutorial notebook with transformation imports
+
+Add GroupRank operator for sector-relative ranking:
+- Ranks values within each group (e.g., sector, industry)
+- Uses pandas groupby + transform for row-by-row processing
+- Handles two inputs (numeric data + group labels)
+- Expects group labels as category dtype
+- Normalizes ranks to [0, 1] range using pct=True
+
+Implementation details:
+- Processes each time period independently
+- Uses observed=True to avoid unused categories
+- Inherits cache from both inputs
+- Step counter = max(input steps) + 1
+
+Tests (10 tests, all passing):
+- Basic within-group ranking
+- Multiple distinct groups
+- NaN handling in data and group labels
+- Universe mask application
+- Cache inheritance with two inputs
+- Step counter and history tracking
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-Authored-By: Claude <noreply@anthropic.com>
 ```
 
 ### Commit Workflow Rules
@@ -658,14 +694,41 @@ git add -A # Stages everything including unrelated changes
 
 1. **Check status**: `git status` to see what changed
 2. **Review changes**: `git diff <file>` to verify changes
-3. **Stage logically**: Group related files that accomplish one thing
-4. **Write clear message**: Follow conventional commit format
-5. **One-line commit**: `git add <files> && git commit -m "type: description"`
+3. **Check recent commits**: `git log --format=fuller -5` to see detailed message format
+4. **Stage logically**: Group related files that accomplish one thing
+5. **Write detailed message**: Follow the structured format (see above)
+6. **Stage and commit**: `git add <files> && git commit` (opens editor for detailed message)
+
+**For multi-line commits (RECOMMENDED):**
+```powershell
+# This opens your editor for detailed commit message
+git add src/alpha_excel/ops/timeseries.py tests/test_ops/test_ts_mean.py && git commit
+```
+
+**For simple one-line commits (only for trivial changes):**
+```powershell
+# Use -m only for very simple changes without details needed
+git add docs/typo_fix.md && git commit -m "docs: fix typo in README"
+```
 
 ### Commit Message Guidelines
 
+**First Line (Summary):**
 - Start with lowercase after the type prefix
-- Be specific and descriptive
-- Focus on **what** and **why**, not **how**
-- Keep under 72 characters when possible
-- Use imperative mood ("add" not "added", "fix" not "fixed")
+- Be specific and concise (<72 characters)
+- Use imperative mood ("add" not "added", "implement" not "implemented")
+- Focus on **what** was done
+
+**Body (Detailed Description):**
+- **Blank line** after first line (required)
+- Start with high-level summary paragraph
+- Use bullet points for key changes
+- Include implementation details
+- Document test coverage (e.g., "Tests: 10 passing")
+- Explain design decisions if relevant
+- Use present tense for descriptions
+
+**Footer:**
+- Include Claude Code attribution (if AI-assisted)
+- `🤖 Generated with [Claude Code](https://claude.com/claude-code)`
+- `Co-Authored-By: Claude <noreply@anthropic.com>`
