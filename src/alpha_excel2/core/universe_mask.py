@@ -74,6 +74,9 @@ class UniverseMask(DataModel):
     def apply_mask(self, data: pd.DataFrame) -> pd.DataFrame:
         """Apply OUTPUT MASKING to data.
 
+        Reindexes data to match universe's shape before masking.
+        This ensures consistent dimensions across all operations.
+
         Sets values to NaN where universe mask is False. This is the core
         masking operation applied to:
         1. Field outputs (in FieldLoader)
@@ -86,18 +89,24 @@ class UniverseMask(DataModel):
             Masked DataFrame (values outside universe set to NaN)
 
         Note:
+            - Data is reindexed to universe's index/columns first
+            - Then values are set to NaN where universe mask is False
             - This operation is idempotent: masking already-masked data is safe
-            - Uses pandas.DataFrame.where() for efficient masking
-            - Aligns data with mask using pandas automatic alignment
         """
         if not isinstance(data, pd.DataFrame):
             raise TypeError(
                 f"data must be a pandas DataFrame, got {type(data)}"
             )
 
-        # Use pandas where: keep values where mask is True, else set to NaN
-        # pandas automatically aligns by index and columns
-        masked_data = data.where(self._data, np.nan)
+        # Step 1: Reindex data to match universe's shape
+        # This ensures all data has consistent dimensions
+        reindexed_data = data.reindex(
+            index=self._data.index,
+            columns=self._data.columns
+        )
+
+        # Step 2: Apply mask - set to NaN where mask is False
+        masked_data = reindexed_data.where(self._data, np.nan)
 
         return masked_data
 
