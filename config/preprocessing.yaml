@@ -1,0 +1,38 @@
+# Type-based preprocessing rules for alpha-excel v2.0
+# Defines how each data type should be preprocessed when loaded by FieldLoader
+
+# Numeric data (returns, prices, volumes, ratios, etc.)
+# - No forward-fill: Missing data should remain NaN to avoid lookahead bias
+numeric:
+  forward_fill: false
+
+# Group data (industry, sector, region, etc.)
+# - Forward-fill: Group labels don't change frequently (e.g., monthly -> daily expansion)
+# - Category dtype conversion: For efficient memory and NumPy scatter-gather operations
+group:
+  forward_fill: true
+
+# Portfolio weights
+# - No forward-fill: Weights are recalculated each period
+weight:
+  forward_fill: false
+
+# Portfolio returns
+# - No forward-fill: Returns are period-specific
+port_return:
+  forward_fill: false
+
+# Universe masks (boolean flags for investable universe)
+# - No forward-fill: Mask changes should be explicit
+mask:
+  forward_fill: false
+
+# Boolean flags (binary indicators)
+# - No forward-fill: Preserve explicit changes
+boolean:
+  forward_fill: false
+
+# Object data (arbitrary Python objects)
+# - No forward-fill: Object semantics vary
+object:
+  forward_fill: false

@@ -2,11 +2,24 @@
   "permissions": {
     "allow": [
       "Bash(poetry run python:*)",
-      "Bash(timeout 15 poetry run python:*)",
       "Bash(poetry run pytest:*)",
-      "Bash(dir:*)"
+
+      "Bash(dir:*)", 
+
+      "Bash(git log:*)",
+      "Bash(git status:*)"
     ],
-    "deny": [],
-    "ask": []
+    "deny": [
+      "Bash(pip install:*)",
+      "Bash(poetry add:*)",
+      "Bash(poetry remove:*)",
+
+      "Bash(git push:*)",
+      "Bash(git pull:*)"
+    ],
+    "ask": [
+      "Bash(git add:*)",
+      "Bash(git commit:*)"
+    ]
   }
 }

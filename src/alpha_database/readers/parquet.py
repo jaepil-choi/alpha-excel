@@ -69,10 +69,16 @@ class ParquetReader(BaseReader):
         # with trusted config files, not user input.
         for param_name, param_value in params.items():
             placeholder = f":{param_name}"
-            # Quote string values
+            # Format parameter values for SQL
             if isinstance(param_value, str):
+                # String values need quotes
                 formatted_value = f"'{param_value}'"
+            elif isinstance(param_value, (pd.Timestamp, pd.DatetimeIndex)):
+                # Convert timestamps to date-only strings with quotes
+                date_str = pd.Timestamp(param_value).strftime('%Y-%m-%d')
+                formatted_value = f"'{date_str}'"
             else:
+                # Numeric values don't need quotes
                 formatted_value = str(param_value)
             formatted_query = formatted_query.replace(placeholder, formatted_value)
 
