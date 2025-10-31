@@ -552,10 +552,134 @@ Why it's useful:
 """)
 
     # ========================================================================
-    #  SECTION 10: SUMMARY & NEXT STEPS
+    #  SECTION 10: BACKTESTING (Phase 3.5 - NEW!)
     # ========================================================================
 
-    print_section("Summary & Next Steps", 10)
+    print_section("Backtesting with Separated BacktestEngine", 10)
+
+    print("""
+Phase 3.5 introduces backtesting capabilities with clean architecture:
+- BacktestEngine: Separated component for all backtesting logic
+- Facade delegation: ae.set_scaler(), ae.to_weights(), ae.to_portfolio_returns()
+- Long/Short analysis: ae.to_long_returns(), ae.to_short_returns()
+
+Architecture Benefits:
+  [+] Separation of concerns: Backtesting logic isolated from facade
+  [+] Finer-grained DI: BacktestEngine receives only what it needs
+  [+] Testable independently: No facade dependency
+  [+] Extensible: Future features (open-close, shares) have clear home
+""")
+
+    print_subsection("Basic Backtesting Workflow")
+
+    print("\n[Step 1: Create Signal]")
+    # Reuse the signal we created earlier (ma5 - ma3 → rank)
+    print(f"  Using previously created signal: {signal._step_history[-1]['expr']}")
+    print(f"  Signal shape: {signal.to_df().shape}")
+    print(f"  Signal range: [{signal.to_df().min().min():.4f}, {signal.to_df().max().max():.4f}]")
+
+    print("\n[Step 2: Set Weight Scaler]")
+    print("  Setting DollarNeutral scaler (gross=2.0, net=0.0)")
+    ae.set_scaler('DollarNeutral')
+    print("  [OK] Scaler set successfully")
+
+    print("\n[Step 3: Convert Signal to Weights]")
+    weights = ae.to_weights(signal)
+    print_alpha_data_info(weights, 'weights')
+
+    # Verify weight properties
+    weights_df = weights.to_df()
+    gross_exposure = weights_df.abs().sum(axis=1)
+    net_exposure = weights_df.sum(axis=1)
+
+    print("\n  Weight Characteristics:")
+    print(f"    Mean Gross Exposure: {gross_exposure.mean():.4f} (target: 2.0)")
+    print(f"    Mean Net Exposure: {net_exposure.mean():.4f} (target: 0.0)")
+    print(f"    Std Net Exposure: {net_exposure.std():.6f}")
+
+    print("\n[Step 4: Compute Portfolio Returns]")
+    print("  Calling ae.to_portfolio_returns(weights)")
+    print("  → Delegates to BacktestEngine.compute_returns()")
+    port_return = ae.to_portfolio_returns(weights)
+
+    print_alpha_data_info(port_return, 'port_return')
+    print_dataframe_info(port_return.to_df(), 'port_return', show_head=8)
+
+    print("\n[Step 5: Analyze Performance]")
+    port_df = port_return.to_df()
+
+    # Daily PnL (sum across all positions)
+    daily_pnl = port_df.sum(axis=1)
+    cum_pnl = daily_pnl.cumsum()
+
+    print(f"\n  Portfolio Performance:")
+    print(f"    Total Return: {cum_pnl.iloc[-1]:.4f} ({cum_pnl.iloc[-1]*100:.2f}%)")
+    print(f"    Daily Mean Return: {daily_pnl.mean():.6f}")
+    print(f"    Daily Std Return: {daily_pnl.std():.6f}")
+    print(f"    Sharpe Ratio (annualized): {daily_pnl.mean() / daily_pnl.std() * np.sqrt(252):.2f}")
+    print(f"    Max Drawdown: {(cum_pnl - cum_pnl.cummax()).min():.4f}")
+
+    # Show cumulative PnL
+    print(f"\n  Cumulative PnL (first 10 days):")
+    for i in range(min(10, len(cum_pnl))):
+        print(f"    {cum_pnl.index[i].strftime('%Y-%m-%d')}: {cum_pnl.iloc[i]:8.4f}")
+
+    print_subsection("Long/Short Separation Analysis")
+
+    print("\n[Compute Long Returns (weights > 0)]")
+    long_return = ae.to_long_returns(weights)
+    print(f"  → Delegates to BacktestEngine.compute_long_returns()")
+    print(f"  Data type: {long_return._data_type}")
+    print(f"  Shape: {long_return.to_df().shape}")
+
+    long_df = long_return.to_df()
+    long_daily_pnl = long_df.sum(axis=1)
+    long_cum_pnl = long_daily_pnl.cumsum()
+
+    print(f"\n  Long Side Performance:")
+    print(f"    Total Return: {long_cum_pnl.iloc[-1]:.4f} ({long_cum_pnl.iloc[-1]*100:.2f}%)")
+    print(f"    Daily Mean: {long_daily_pnl.mean():.6f}")
+    print(f"    Daily Std: {long_daily_pnl.std():.6f}")
+    print(f"    Sharpe Ratio: {long_daily_pnl.mean() / long_daily_pnl.std() * np.sqrt(252):.2f}")
+
+    print("\n[Compute Short Returns (weights < 0)]")
+    short_return = ae.to_short_returns(weights)
+    print(f"  → Delegates to BacktestEngine.compute_short_returns()")
+    print(f"  Data type: {short_return._data_type}")
+    print(f"  Shape: {short_return.to_df().shape}")
+
+    short_df = short_return.to_df()
+    short_daily_pnl = short_df.sum(axis=1)
+    short_cum_pnl = short_daily_pnl.cumsum()
+
+    print(f"\n  Short Side Performance:")
+    print(f"    Total Return: {short_cum_pnl.iloc[-1]:.4f} ({short_cum_pnl.iloc[-1]*100:.2f}%)")
+    print(f"    Daily Mean: {short_daily_pnl.mean():.6f}")
+    print(f"    Daily Std: {short_daily_pnl.std():.6f}")
+    print(f"    Sharpe Ratio: {short_daily_pnl.mean() / short_daily_pnl.std() * np.sqrt(252):.2f}")
+
+    print("\n[Long vs Short Comparison]")
+    print(f"  Long Total Return: {long_cum_pnl.iloc[-1]:8.4f} ({long_cum_pnl.iloc[-1]*100:6.2f}%)")
+    print(f"  Short Total Return: {short_cum_pnl.iloc[-1]:8.4f} ({short_cum_pnl.iloc[-1]*100:6.2f}%)")
+    print(f"  Combined (should match): {cum_pnl.iloc[-1]:8.4f} ({cum_pnl.iloc[-1]*100:6.2f}%)")
+    print(f"  Verification: {abs(long_cum_pnl.iloc[-1] + short_cum_pnl.iloc[-1] - cum_pnl.iloc[-1]) < 1e-10}")
+
+    print("\n[Phase 3.5 Architecture Validation]")
+    print("""
+  [+] Facade remains thin coordinator (only delegation)
+  [+] BacktestEngine handles all business logic
+  [+] Weight shifting applied (first day NaN - no lookahead bias)
+  [+] Universe masking applied automatically
+  [+] Long/short split works correctly
+  [+] Cache inheritance preserved through backtesting
+  [+] AlphaData wrapping maintains step history
+""")
+
+    # ========================================================================
+    #  SECTION 11: SUMMARY & NEXT STEPS
+    # ========================================================================
+
+    print_section("Summary & Next Steps", 11)
 
     print("""
 === WHAT WE DEMONSTRATED ===
@@ -600,23 +724,30 @@ Why it's useful:
    - Automatic cache propagation
    - Accessing cached steps via get_cached_step()
 
+9. [DONE] Backtesting with BacktestEngine (Phase 3.5 - NEW!)
+   - Separated architecture: BacktestEngine isolated from facade
+   - Weight scaling: set_scaler() and to_weights()
+   - Portfolio returns: to_portfolio_returns()
+   - Long/Short analysis: to_long_returns(), to_short_returns()
+   - Performance metrics: Sharpe ratio, drawdown, cumulative PnL
+
 === ARCHITECTURE HIGHLIGHTS ===
 
 - Eager Execution: 10x faster than v1.0 Visitor pattern
 - Type-Aware System: Automatic preprocessing based on data type
 - Method-Based API: No imports, IDE autocomplete
-- Config-Driven: 4 YAML files control behavior
+- Config-Driven: 5 YAML files control behavior (added backtest.yaml)
 - Finer-Grained DI: Components receive only what they need
 - Single Output Masking: Applied at field loading and operator output
+- Separated Backtesting: BacktestEngine handles all business logic
 
-=== WHAT'S COMING NEXT (Phase 3.5+) ===
+=== WHAT'S COMING NEXT (Phase 3.6+) ===
 
-Phase 3.5 - Backtesting Methods:
-  - set_scaler(scaler_class, **params)
-  - to_weights(signal) -> AlphaData(type='weight')
-  - to_portfolio_returns(weights) -> AlphaData(type='port_return')
-  - to_long_returns(weights)
-  - to_short_returns(weights)
+Phase 3.6 - Integration & Validation:
+  - End-to-end integration tests
+  - Showcase migration to v2.0 API
+  - Documentation updates
+  - Performance validation
 
 Phase 4 - Additional Operators:
   - Time-series: TsStd, TsRank, TsCorr, TsZscore

@@ -1,0 +1,74 @@
+# Backtesting Configuration for alpha-excel v2.0
+# Controls return calculation, position sizing, and other backtesting parameters
+
+# ============================================================================
+# Return Calculation (MVP)
+# ============================================================================
+
+return_calculation:
+  # Field to load for returns data (from data.yaml)
+  field: 'returns'  # Pre-calculated close-close returns
+
+# ============================================================================
+# Future Settings (Post-MVP) - Placeholders
+# ============================================================================
+
+# Advanced return calculation methods (Phase 4.1+):
+# return_calculation:
+#   type: 'open_close'  # 'close_close', 'open_close', 'vwap', 'custom'
+#   open_field: 'fnguide_adj_open'
+#   close_field: 'fnguide_adj_close'
+#   # For custom: specify execution price calculation method
+
+# Position sizing (Phase 4.2+):
+# position_sizing:
+#   method: 'shares'  # 'weights' (MVP default) or 'shares' (integer shares only)
+#   book_size: 1000000  # Starting capital for share-based sizing
+#   price_field: 'fnguide_adj_close'  # Price field for share conversion
+#   rounding: 'round'  # 'round', 'floor', 'ceil' for share counts
+
+# Transaction costs (Phase 4.3+):
+# transaction_costs:
+#   commission:
+#     type: 'percentage'  # 'percentage' or 'flat'
+#     rate: 0.001  # 0.1% per trade (10 bps)
+#     min_fee: 1.0  # Minimum commission per trade
+#
+#   slippage:
+#     model: 'proportional'  # 'proportional' or 'fixed'
+#     bps: 5  # 5 basis points (0.05%)
+#
+#   market_impact:
+#     enabled: false
+#     model: 'square_root'  # Market impact model
+#     coefficient: 0.1
+#     volume_field: 'fnguide_trading_volume'
+
+# Risk management (Phase 5+):
+# risk_management:
+#   position_limits:
+#     max_weight_per_security: 0.05  # 5% max per stock
+#     trim_method: 'proportional'  # 'proportional' or 'hard_cap'
+#
+#   turnover:
+#     daily_max: 0.20  # Maximum 20% daily turnover
+#     enforce: true
+#
+#   leverage:
+#     max_gross: 2.0  # Maximum gross exposure (sum of abs weights)
+#     max_net: 0.5  # Maximum net exposure (sum of weights)
+
+# Rebalancing schedule (Phase 5+):
+# rebalancing:
+#   frequency: 'daily'  # 'daily', 'weekly', 'monthly', 'quarterly'
+#   day_of_week: 'Monday'  # For weekly rebalancing
+#   day_of_month: 1  # For monthly rebalancing
+#   skip_holidays: true  # Skip rebalancing on non-trading days
+
+# Cash management (Phase 5+):
+# cash_management:
+#   initial_cash: 1000000  # Starting cash balance
+#   cash_rate: 0.02  # Annual interest on cash (2%)
+#   margin_rate: 0.05  # Annual interest on negative cash (5%)
+#   dividend_field: 'fnguide_dividends'  # Dividend data field
+#   reinvest_dividends: true  # Automatically reinvest dividends

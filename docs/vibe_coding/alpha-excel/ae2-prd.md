@@ -466,3 +466,433 @@ print(f"Short Sharpe: {short_sharpe:.2f}")
 4. **테스트**: 모든 기존 테스트 통과 + 새 기능 테스트
 5. **마이그레이션**: Showcase 및 문서 업데이트
 6. **배포**: v2.0.0 릴리스
+
+---
+
+## 1.6. Beyond MVP: Advanced Backtesting Features
+
+### MVP Scope (v2.0)
+
+**현재 구현 범위:**
+
+**Return Calculation (수익률 계산):**
+- Close-close returns: data.yaml에서 pre-calculated 'returns' field 로딩
+- 계산식: `(close_t - close_t-1) / close_t-1`
+- 가장 단순하고 일반적인 방식
+
+**Position Sizing (포지션 크기 결정):**
+- Weight-based: 포트폴리오 가중치 기반
+- 분수 단위 거래 허용 (예: 0.37% weight = 3.7주)
+- 현실적이지 않지만 백테스트에서 일반적
+
+**Execution (실행):**
+- Single-day holding: 1일 보유
+- Close price execution: 종가에 즉시 실행
+- No transaction costs: 거래 비용 없음
+
+### Post-MVP Features (향후 개선 사항)
+
+#### 1. Advanced Return Calculation (고급 수익률 계산)
+
+**1.1. Open-Close Returns**
+
+**문제:**
+- Close-close returns는 비현실적
+- 실제로는 시가에 매수하고 종가에 매도하는 경우가 많음
+
+**해결:**
+```python
+# MVP (현재)
+returns = f('returns')  # Close-close returns
+
+# Post-MVP (향후)
+ae.set_return_type('open_close')
+# BacktestEngine이 adj_open과 adj_close를 로딩하여 계산
+# Formula: (close_t - open_t) / open_t
+```
+
+**요구사항:**
+- data.yaml에 `fnguide_adj_open` field 추가 필요
+- backtest.yaml에 return_type 설정:
+  ```yaml
+  return_calculation:
+    type: 'open_close'
+    open_field: 'fnguide_adj_open'
+    close_field: 'fnguide_adj_close'
+  ```
+
+**장점:**
+- 더 현실적인 백테스트
+- 장중 변동성 고려
+- 실제 거래 시나리오에 가까움
+
+**1.2. VWAP-Based Returns**
+
+**목적:** 대규모 주문의 실행 가격 시뮬레이션
+
+**구현:**
+```yaml
+return_calculation:
+  type: 'vwap'
+  vwap_field: 'fnguide_vwap'
+```
+
+**활용:**
+- 기관 투자자 백테스트
+- 대량 거래 시뮬레이션
+- 시장 충격 고려
+
+**1.3. Custom Execution Prices**
+
+**유연성:** 사용자 정의 실행 가격
+
+**예시:**
+- 시가 + 종가 평균: `(open + close) / 2`
+- 고가/저가 기반
+- 사용자가 직접 계산한 execution price
+
+---
+
+#### 2. Share-Based Position Sizing (주식 수 기반 포지션)
+
+**2.1. Weight-Based 문제점**
+
+**현재 방식 (MVP):**
+```python
+# 포트폴리오 가중치: 0.37%
+# 실제 거래: 3.7주 (불가능!)
+```
+
+**문제:**
+- 분수 단위 거래 허용 → 비현실적
+- 실제로는 정수 주만 거래 가능
+- 포트폴리오 drift 고려 불가
+
+**2.2. Share-Based 해결**
+
+**구현:**
+```python
+# AlphaExcel 초기화 시 book_size 설정
+ae = AlphaExcel(
+    start_time='2023-01-01',
+    end_time='2024-12-31',
+    book_size=1_000_000  # $1M 초기 자본
+)
+
+# 시그널 생성
+signal = o.rank(o.ts_mean(returns, window=5))
+
+# 가중치 계산 (dollar weights)
+weights = ae.to_weights(signal)
+
+# 주식 수로 변환 (정수)
+positions = ae.to_positions(weights)  # NEW METHOD
+# positions = round(weights * book_size / adj_close)
+```
+
+**요구사항:**
+- `book_size` parameter in AlphaExcel.__init__()
+- Load `fnguide_adj_close` for conversion
+- New method: `ae.to_positions(weights) -> AlphaData(type='positions')`
+- New data type: `'positions'` (integer share counts)
+
+**backtest.yaml 설정:**
+```yaml
+position_sizing:
+  method: 'shares'  # 'weights' or 'shares'
+  book_size: 1000000  # Starting capital
+  price_field: 'fnguide_adj_close'
+  rounding: 'round'  # 'round', 'floor', 'ceil'
+```
+
+**장점:**
+- 현실적인 실행 (정수 주만 거래)
+- 정확한 포지션 추적
+- 실제 현금 필요량 계산
+- 가격 변동에 따른 포트폴리오 drift 모델링
+
+**2.3. Cash Management**
+
+**추가 기능:**
+```python
+# 현금 잔고 추적
+cash_balance = ae.get_cash_balance()
+
+# 배당금 재투자
+ae.set_dividend_reinvestment(True)
+
+# 마진 이자 계산
+ae.set_margin_rate(0.05)  # 5% annual
+```
+
+---
+
+#### 3. Transaction Costs (거래 비용)
+
+**3.1. Commission Fees (수수료)**
+
+**구현:**
+```yaml
+transaction_costs:
+  commission:
+    type: 'percentage'  # 'percentage' or 'flat'
+    rate: 0.001  # 0.1% per trade
+    min_fee: 1.0  # Minimum $1 per trade
+```
+
+**계산:**
+```python
+# 매수/매도 시 수수료 차감
+commission = max(trade_value * commission_rate, min_fee)
+net_return = gross_return - commission
+```
+
+**3.2. Slippage (슬리피지)**
+
+**목적:** 주문 실행 시 가격 변동 모델링
+
+**구현:**
+```yaml
+transaction_costs:
+  slippage:
+    model: 'proportional'  # 'proportional' or 'fixed'
+    bps: 5  # 5 basis points (0.05%)
+```
+
+**계산:**
+```python
+# 매수: 실행 가격 상승
+buy_price = mid_price * (1 + slippage_bps / 10000)
+
+# 매도: 실행 가격 하락
+sell_price = mid_price * (1 - slippage_bps / 10000)
+```
+
+**3.3. Market Impact (시장 충격)**
+
+**목적:** 대규모 주문이 가격에 미치는 영향
+
+**모델:**
+```python
+# 주문 크기 vs. 평균 거래량 비율
+order_size_ratio = order_shares / avg_daily_volume
+
+# 시장 충격 = f(order_size_ratio)
+market_impact = k * (order_size_ratio ** alpha)
+# k, alpha는 실증적으로 추정된 파라미터
+```
+
+**구현:**
+```yaml
+transaction_costs:
+  market_impact:
+    enabled: true
+    model: 'square_root'  # Square root model
+    coefficient: 0.1
+    volume_field: 'fnguide_trading_volume'
+```
+
+---
+
+#### 4. Risk Management (리스크 관리)
+
+**4.1. Position Limits (포지션 제한)**
+
+**구현:**
+```python
+# 개별 종목 최대 가중치 제한
+ae.set_position_limit(max_weight=0.05)  # 5% max per stock
+
+# 결과: 5%를 초과하는 포지션은 5%로 trim
+```
+
+**backtest.yaml 설정:**
+```yaml
+risk_management:
+  position_limits:
+    max_weight_per_security: 0.05
+    trim_method: 'proportional'  # Redistribute excess to others
+```
+
+**4.2. Turnover Constraints (회전율 제약)**
+
+**구현:**
+```python
+# 일일 최대 회전율 제한
+ae.set_turnover_limit(daily_max=0.20)  # 20% max daily turnover
+
+# 결과: 회전율이 20%를 초과하면 거래 일부 취소
+```
+
+**계산:**
+```python
+turnover = sum(abs(weights_t - weights_t-1)) / 2
+if turnover > daily_max:
+    # Scale down trades proportionally
+    scaling_factor = daily_max / turnover
+    adjusted_trades = trades * scaling_factor
+```
+
+**4.3. Leverage Limits (레버리지 제한)**
+
+**구현:**
+```yaml
+risk_management:
+  leverage:
+    max_gross: 2.0  # Maximum 200% gross exposure
+    max_net: 0.5    # Maximum 50% net exposure (long bias)
+```
+
+**적용:**
+```python
+gross = sum(abs(weights))
+net = sum(weights)
+
+if gross > max_gross or abs(net) > max_net:
+    # Scale down entire portfolio
+    weights_adjusted = weights * scale_factor
+```
+
+---
+
+#### 5. Multi-Period Backtesting (다기간 백테스트)
+
+**5.1. Holding Period (보유 기간)**
+
+**MVP: 1일 보유**
+```python
+# 매일 리밸런싱
+weights_t = ae.to_weights(signal_t)
+returns_t = ae.to_portfolio_returns(weights_t)
+```
+
+**Post-MVP: N일 보유**
+```python
+# 5일마다 리밸런싱
+ae.set_rebalancing_frequency(days=5)
+
+# 또는 특정 요일
+ae.set_rebalancing_frequency(weekday='Monday')
+```
+
+**구현:**
+```python
+# N-day forward return 계산
+forward_return = (price_t+N - price_t) / price_t
+
+# 가중치는 N일 동안 유지
+weights_t = weights_rebalance_date
+```
+
+**5.2. Rebalancing Schedules (리밸런싱 일정)**
+
+**옵션:**
+- **Daily**: 매일 (MVP)
+- **Weekly**: 매주 특정 요일
+- **Monthly**: 매월 특정 날짜
+- **Quarterly**: 분기별
+- **Event-driven**: 특정 조건 충족 시
+
+**구현:**
+```yaml
+rebalancing:
+  frequency: 'monthly'
+  day_of_month: 1  # First day of month
+  skip_holidays: true
+```
+
+**5.3. Cash Management (현금 관리)**
+
+**기능:**
+- 현금 잔고 추적 (시간에 따른 변화)
+- 배당금 수령 및 재투자
+- 마진 이자 지급 (음수 현금)
+- 현금 수익률 (money market rate)
+
+**구현:**
+```python
+# 현금 잔고 초기화
+ae = AlphaExcel(..., initial_cash=1_000_000)
+
+# 배당금 설정
+ae.set_dividend_field('fnguide_dividends')
+ae.set_dividend_reinvestment(True)
+
+# 현금 수익률 설정
+ae.set_cash_rate(0.02)  # 2% annual on cash
+
+# 마진 이자율 설정
+ae.set_margin_rate(0.05)  # 5% annual on negative cash
+```
+
+---
+
+### Implementation Strategy (구현 전략)
+
+**Phase 4.1: Price-Based Returns (가격 기반 수익률)**
+- 요구사항: adj_open field in data.yaml
+- 난이도: ⭐ (낮음)
+- 예상 기간: 1주
+- 컴포넌트: BacktestEngine._load_returns() 확장
+
+**Phase 4.2: Share-Based Position Sizing (주식 수 기반)**
+- 요구사항: book_size parameter, adj_close field
+- 난이도: ⭐⭐ (중간)
+- 예상 기간: 2주
+- 컴포넌트: New PositionManager, ae.to_positions() method
+
+**Phase 4.3: Transaction Costs (거래 비용)**
+- 요구사항: Commission, slippage, market impact models
+- 난이도: ⭐⭐⭐ (높음)
+- 예상 기간: 3주
+- 컴포넌트: New TransactionCostModel, integrate with BacktestEngine
+
+**Phase 5: Advanced Features (고급 기능)**
+- 요구사항: Risk limits, multi-period, cash management
+- 난이도: ⭐⭐⭐⭐ (매우 높음)
+- 예상 기간: 4-6주
+- 컴포넌트: RiskManager, RebalancingScheduler, CashManager
+
+---
+
+### Design Principles (설계 원칙)
+
+**모든 고급 기능은 다음 원칙을 따름:**
+
+1. **Config-Driven**: backtest.yaml에서 제어
+2. **Backward Compatible**: 기본값은 MVP 동작 유지
+3. **Extensible**: 새로운 모델 추가 용이
+4. **Testable**: 독립적으로 테스트 가능한 컴포넌트
+5. **Separation of Concerns**: BacktestEngine에 집중, Facade는 delegation만
+
+**예시:**
+```python
+# MVP 동작 (기본값)
+ae = AlphaExcel(start_time='2023-01-01', end_time='2024-12-31')
+# → Simple close-close returns, weight-based, no costs
+
+# 고급 기능 활성화
+ae = AlphaExcel(
+    start_time='2023-01-01',
+    end_time='2024-12-31',
+    book_size=1_000_000,  # Share-based position sizing
+    config_path='config_advanced'  # Uses config_advanced/backtest.yaml
+)
+ae.set_return_type('open_close')
+ae.set_position_limit(max_weight=0.05)
+ae.set_turnover_limit(daily_max=0.20)
+# → Advanced backtesting with realistic constraints
+```
+
+---
+
+### 참고 자료
+
+**관련 문서:**
+- Architecture: `ae2-architecture.md` - Section I (BacktestEngine)
+- Implementation: Phase 4.1-5 계획
+
+**학술 참고:**
+- Slippage models: Almgren & Chriss (2000), "Optimal Execution"
+- Transaction costs: Kissell & Glantz (2013), "Optimal Trading Strategies"
+- Market impact: Barra Risk Model documentation

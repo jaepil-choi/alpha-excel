@@ -789,7 +789,193 @@ class ScalerManager:
 
 ---
 
-### I. ConfigManager (Config-Driven Design)
+### I. BacktestEngine (Backtesting Logic)
+
+**역할:** Portfolio returns 계산 및 long/short 분석 지원. Facade로부터 분리된 독립 컴포넌트.
+
+**Design Rationale:**
+- **Separation of Concerns**: Backtesting business logic을 facade에서 분리
+- **Explicit Dependencies**: field_loader, universe_mask, config_manager만 의존
+- **Extensibility**: 향후 기능(다양한 return 계산 방식, position sizing) 확장 가능
+- **Testability**: Facade 없이도 독립적으로 테스트 가능
+
+#### MVP Implementation (Phase 3.5)
+
+**Core Features:**
+- Load pre-calculated returns from data.yaml ('returns' field)
+- Shift weights forward 1 day (avoid lookahead bias)
+- Apply universe masking (OUTPUT masking)
+- Element-wise multiplication: weights × returns
+- Support long/short return splits
+
+**Explicit Dependencies (Finer-Grained DI):**
+```python
+class BacktestEngine:
+    """Backtesting engine with explicit dependencies.
+
+    Receives only what it needs:
+    - field_loader: For loading returns data
+    - universe_mask: For applying output masking
+    - config_manager: For reading backtest configs
+
+    Does NOT depend on AlphaExcel facade.
+    """
+
+    def __init__(self,
+                 field_loader: FieldLoader,
+                 universe_mask: UniverseMask,
+                 config_manager: ConfigManager):
+        self._field_loader = field_loader
+        self._universe_mask = universe_mask
+        self._config_manager = config_manager
+        self._returns_cache = None  # Lazy load returns data
+```
+
+#### Methods
+
+```python
+def compute_returns(self, weights: AlphaData) -> AlphaData:
+    """
+    Compute portfolio returns from weights.
+
+    Process:
+    1. Load returns data (lazy load + cache)
+    2. Shift weights forward 1 day (avoid lookahead)
+    3. Apply universe mask to shifted weights
+    4. Apply universe mask to returns
+    5. Element-wise multiply: weights × returns
+    6. Wrap in AlphaData(type='port_return')
+
+    Returns:
+        AlphaData with data_type='port_return'
+    """
+    ...
+
+def compute_long_returns(self, weights: AlphaData) -> AlphaData:
+    """
+    Compute returns for long positions only (weights > 0).
+
+    Process:
+    1. Filter weights: keep only positive values
+    2. Call compute_returns() with filtered weights
+
+    Returns:
+        AlphaData with data_type='port_return'
+    """
+    ...
+
+def compute_short_returns(self, weights: AlphaData) -> AlphaData:
+    """
+    Compute returns for short positions only (weights < 0).
+
+    Process:
+    1. Filter weights: keep only negative values
+    2. Call compute_returns() with filtered weights
+
+    Returns:
+        AlphaData with data_type='port_return'
+    """
+    ...
+
+def _load_returns(self) -> pd.DataFrame:
+    """
+    Lazy load returns data from config.
+
+    MVP: Load pre-calculated 'returns' field from data.yaml.
+    Future: Support different return types (open-close, vwap, etc.)
+
+    Returns:
+        Returns DataFrame (T, N)
+    """
+    ...
+```
+
+#### Integration with Facade
+
+**Facade 역할: Thin delegation only (no business logic)**
+```python
+class AlphaExcel:
+    def __init__(self, ...):
+        # ... existing initialization ...
+
+        # Phase 3.5: Initialize BacktestEngine with explicit dependencies
+        self._backtest_engine = BacktestEngine(
+            field_loader=self._field_loader,
+            universe_mask=self._universe_mask,
+            config_manager=self._config_manager
+        )
+
+    # Thin delegation methods (no business logic)
+    def to_portfolio_returns(self, weights: AlphaData) -> AlphaData:
+        """Delegate to BacktestEngine."""
+        return self._backtest_engine.compute_returns(weights)
+
+    def to_long_returns(self, weights: AlphaData) -> AlphaData:
+        """Delegate to BacktestEngine."""
+        return self._backtest_engine.compute_long_returns(weights)
+
+    def to_short_returns(self, weights: AlphaData) -> AlphaData:
+        """Delegate to BacktestEngine."""
+        return self._backtest_engine.compute_short_returns(weights)
+```
+
+#### Configuration
+
+**Config file: `config/backtest.yaml`** (NEW - 5th config file)
+```yaml
+# Backtesting Configuration
+# Controls return calculation and position sizing
+
+# Return calculation (MVP)
+return_calculation:
+  field: 'returns'  # Field to load for returns data
+
+# Future settings (placeholders for post-MVP):
+# return_calculation:
+#   type: 'open_close'
+#   open_field: 'fnguide_adj_open'
+#   close_field: 'fnguide_adj_close'
+#
+# position_sizing:
+#   method: 'shares'  # 'weights' or 'shares'
+#   book_size: 1000000
+#   price_field: 'fnguide_adj_close'
+```
+
+#### Future Enhancements (Beyond MVP)
+
+**이러한 기능들은 BacktestEngine에 추가될 예정:**
+
+1. **Advanced Return Calculation:**
+   - Open-close returns: `(close_t - open_t) / open_t`
+   - VWAP-based returns: Institutional execution simulation
+   - Custom execution prices
+
+2. **Share-Based Position Sizing:**
+   - Convert dollar weights → integer share counts
+   - Requires `book_size` parameter and `adj_close` data
+   - More realistic (no fractional shares)
+
+3. **Transaction Costs:**
+   - Commission fees
+   - Slippage modeling
+   - Market impact
+
+4. **Risk Management:**
+   - Position limits
+   - Turnover constraints
+   - Leverage limits
+
+5. **Multi-Period Backtesting:**
+   - Multi-day holding periods
+   - Rebalancing schedules
+   - Cash management
+
+**See PRD section 1.6 for detailed specifications.**
+
+---
+
+### J. ConfigManager (Config-Driven Design)
 
 **역할:** 4개 YAML 파일 읽기 및 시스템 전체 설정 제공.
 
@@ -864,7 +1050,7 @@ data_loading:
 
 ---
 
-### J. Type System
+### K. Type System
 
 **역할:** 데이터 타입 정의 및 검증.
 
@@ -1526,24 +1712,81 @@ print(o.list_operators())
 
 ---
 
-#### Phase 3.5: Backtesting Methods
+#### Phase 3.5: Backtesting Methods (with Separated BacktestEngine)
 **Dependencies:** Phase 3.2 (ScalerManager), Phase 3.4 (Facade core)
-**Estimated Tests:** ~25 tests
+**Estimated Tests:** ~35 tests (20 BacktestEngine + 15 integration)
+
+**Key Architectural Change:**
+- ❌ **Before**: Backtesting logic directly in facade methods
+- ✅ **After**: Separated `BacktestEngine` component with facade delegation
+- **Benefit**: Maintains v2.0's "thin coordinator" principle
 
 **Components:**
-1. **Extend AlphaExcel Facade** (`core/facade.py`)
-   - Add ScalerManager to initialization
-   - `set_scaler(scaler, **params)` - Delegate to ScalerManager
-   - `to_weights(signal: AlphaData) -> AlphaData` - Apply scaler, return type='weight'
-   - `to_portfolio_returns(weights: AlphaData) -> AlphaData`
-     - Load returns, shift weights, apply masks, multiply
-     - Return type='port_return'
-   - `to_long_returns(weights: AlphaData) -> AlphaData` - Filter weights > 0
-   - `to_short_returns(weights: AlphaData) -> AlphaData` - Filter weights < 0
+
+1. **NEW: BacktestEngine** (`portfolio/backtest_engine.py`)
+   - **Role**: All backtesting business logic isolated here
+   - **Dependencies**: field_loader, universe_mask, config_manager (explicit, finer-grained)
+   - **Methods**:
+     - `compute_returns(weights: AlphaData) -> AlphaData`
+       - Load returns data (lazy load + cache)
+       - Shift weights forward 1 day (avoid lookahead)
+       - Apply universe masks to weights and returns
+       - Element-wise multiply: weights × returns
+       - Return AlphaData(type='port_return')
+     - `compute_long_returns(weights: AlphaData) -> AlphaData`
+       - Filter weights > 0, then call compute_returns()
+     - `compute_short_returns(weights: AlphaData) -> AlphaData`
+       - Filter weights < 0, then call compute_returns()
+   - **Configuration**: Reads from `config/backtest.yaml`
+   - **Testable**: Independently testable without facade
+   - **Extensible**: Future features (open-close, shares) have clear home
+
+2. **Extend AlphaExcel Facade** (`core/facade.py`) - **THIN DELEGATION ONLY**
+   - Add to `__init__()`:
+     - `_scaler_manager = ScalerManager()`
+     - `_backtest_engine = BacktestEngine(field_loader, universe_mask, config_manager)`
+   - **Delegation methods** (no business logic):
+     - `set_scaler(scaler, **params)` → Delegate to ScalerManager
+     - `to_weights(signal: AlphaData)` → Delegate to ScalerManager.get_active_scaler().scale()
+     - `to_portfolio_returns(weights)` → Delegate to BacktestEngine.compute_returns()
+     - `to_long_returns(weights)` → Delegate to BacktestEngine.compute_long_returns()
+     - `to_short_returns(weights)` → Delegate to BacktestEngine.compute_short_returns()
+
+3. **Configuration File** (`config/backtest.yaml`) - NEW (5th config file)
+   - MVP: Specify returns field name
+   - Future: Return calculation type, position sizing method, transaction costs
+
+**Implementation Breakdown:**
+
+**Phase 3.5a: BacktestEngine Component**
+- Implement BacktestEngine class (~150 lines)
+- Write unit tests (20 tests):
+  - Initialization and dependency storage (3 tests)
+  - compute_returns() functionality (4 tests)
+  - Weight shifting and lookahead avoidance (2 tests)
+  - Universe masking application (2 tests)
+  - compute_long_returns() filtering (3 tests)
+  - compute_short_returns() filtering (3 tests)
+  - AlphaData wrapping (type, step, history, cache) (3 tests)
+
+**Phase 3.5b: Facade Integration**
+- Extend facade with 5 delegation methods (~50 lines)
+- Create backtest.yaml config
+- Write integration tests (15 tests):
+  - Facade initialization with BacktestEngine (2 tests)
+  - set_scaler() delegation (2 tests)
+  - to_weights() delegation (3 tests)
+  - to_portfolio_returns() delegation (3 tests)
+  - to_long_returns() and to_short_returns() (3 tests)
+  - End-to-end workflow: signal → weights → returns (2 tests)
 
 **Files:**
-- `src/alpha_excel2/core/facade.py` (extend)
-- `tests/test_alpha_excel2/test_core/test_backtesting.py`
+- `src/alpha_excel2/portfolio/backtest_engine.py` (NEW - BacktestEngine class)
+- `config/backtest.yaml` (NEW - backtesting configuration)
+- `src/alpha_excel2/core/facade.py` (extend with delegation methods)
+- `tests/test_alpha_excel2/test_portfolio/test_backtest_engine.py` (NEW - 20 tests)
+- `tests/test_alpha_excel2/test_core/test_backtesting.py` (15 integration tests)
+- `src/alpha_excel2/portfolio/__init__.py` (export BacktestEngine)
 
 ---
 
@@ -1584,9 +1827,13 @@ print(o.list_operators())
   - Phase 3.3 ✅ (26 tests) - OperatorRegistry
   - Phase 3.4 ✅ (29 tests) - AlphaExcel Facade (Core)
 - **Total Tests Passing:** 260 tests (165 Phase 1+1.5+2 + 95 Phase 3.1-3.4)
-- **Remaining:** Phase 3.5 (Backtesting ~25 tests), Phase 3.6 (Integration ~20 tests)
-- **Implementation Order:** 3.1 ✅ → 3.2 ✅ → 3.3 ✅ → 3.4 ✅ → 3.5 → 3.6 (sequential)
-- **Key Benefit:** Facade is thin coordinator layer, not tightly coupled container
+- **Remaining:** Phase 3.5 (Backtesting ~35 tests), Phase 3.6 (Integration ~20 tests)
+- **Implementation Order:** 3.1 ✅ → 3.2 ✅ → 3.3 ✅ → 3.4 ✅ → 3.5 (3.5a + 3.5b) → 3.6 (sequential)
+- **Key Architectural Benefits:**
+  - Facade remains thin coordinator (delegates to BacktestEngine, not business logic)
+  - BacktestEngine testable independently (finer-grained DI)
+  - Extensible for future features (open-close returns, share-based positions)
+  - Config-driven behavior (backtest.yaml)
 
 ---
 

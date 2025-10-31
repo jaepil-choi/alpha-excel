@@ -11,14 +11,20 @@ Design Principles:
 - Property Accessors: Clean API (ae.field, ae.ops)
 """
 
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 import pandas as pd
 
 from .config_manager import ConfigManager
 from .universe_mask import UniverseMask
 from .field_loader import FieldLoader
 from .operator_registry import OperatorRegistry
+from .alpha_data import AlphaData
 from alpha_database.core.data_source import DataSource
+
+# Avoid circular imports: portfolio depends on core, so use lazy imports
+if TYPE_CHECKING:
+    from alpha_excel2.portfolio.scaler_manager import ScalerManager
+    from alpha_excel2.portfolio.backtest_engine import BacktestEngine
 
 
 class AlphaExcel:
@@ -106,6 +112,20 @@ class AlphaExcel:
 
         # 6. OperatorRegistry (inject dependencies explicitly)
         self._ops = OperatorRegistry(
+            universe_mask=self._universe_mask,
+            config_manager=self._config_manager
+        )
+
+        # 7. ScalerManager (Phase 3.5 - weight scaling)
+        # Import at runtime to avoid circular imports
+        from alpha_excel2.portfolio.scaler_manager import ScalerManager
+        self._scaler_manager = ScalerManager()
+
+        # 8. BacktestEngine (Phase 3.5 - backtesting logic)
+        # Import at runtime to avoid circular imports
+        from alpha_excel2.portfolio.backtest_engine import BacktestEngine
+        self._backtest_engine = BacktestEngine(
+            field_loader=self._field_loader,
             universe_mask=self._universe_mask,
             config_manager=self._config_manager
         )
@@ -230,3 +250,134 @@ class AlphaExcel:
             OperatorRegistry instance with auto-discovered operators
         """
         return self._ops
+
+    # ========================================================================
+    # Phase 3.5: Backtesting Methods (Thin Delegation)
+    # ========================================================================
+
+    def set_scaler(self, scaler_class_or_name, **params):
+        """Set active weight scaler with parameters.
+
+        Delegates to ScalerManager to configure weight scaling strategy.
+
+        Args:
+            scaler_class_or_name: Scaler class or string name ('GrossNet', 'DollarNeutral', 'LongOnly')
+            **params: Scaler-specific parameters (e.g., gross=2.0, net=0.0 for GrossNet)
+
+        Raises:
+            ValueError: If scaler_class_or_name is not found
+            TypeError: If required parameters are missing
+
+        Example:
+            >>> # Dollar neutral (market neutral, gross=2.0, net=0.0)
+            >>> ae.set_scaler('DollarNeutral')
+
+            >>> # Custom gross/net exposure
+            >>> ae.set_scaler('GrossNet', gross=1.5, net=0.3)
+
+            >>> # Long only
+            >>> ae.set_scaler('LongOnly', target_gross=1.0)
+        """
+        self._scaler_manager.set_scaler(scaler_class_or_name, **params)
+
+    def to_weights(self, signal: AlphaData) -> AlphaData:
+        """Convert signal to portfolio weights using active scaler.
+
+        Delegates to ScalerManager's active scaler to transform signal into weights.
+
+        Args:
+            signal: AlphaData with data_type='numeric' (typically ranked signal)
+
+        Returns:
+            AlphaData with data_type='weight'
+
+        Raises:
+            RuntimeError: If no scaler is set (call set_scaler() first)
+            TypeError: If signal data_type is not 'numeric'
+
+        Example:
+            >>> # Create signal
+            >>> signal = o.rank(o.ts_mean(returns, window=5))
+
+            >>> # Set scaler and convert to weights
+            >>> ae.set_scaler('DollarNeutral')
+            >>> weights = ae.to_weights(signal)
+
+            >>> # Check weights sum to gross=2.0, net=0.0
+            >>> weights_df = weights.to_df()
+            >>> print(f"Gross: {weights_df.abs().sum(axis=1).mean():.2f}")
+            >>> print(f"Net: {weights_df.sum(axis=1).mean():.2f}")
+        """
+        # Get active scaler
+        scaler = self._scaler_manager.get_active_scaler()
+        if scaler is None:
+            raise RuntimeError(
+                "No scaler set. Call ae.set_scaler() before converting signal to weights."
+            )
+
+        # Delegate to scaler
+        return scaler.scale(signal)
+
+    def to_portfolio_returns(self, weights: AlphaData) -> AlphaData:
+        """Compute portfolio returns from weights.
+
+        Delegates to BacktestEngine to compute position-level returns.
+
+        Args:
+            weights: AlphaData with data_type='weight'
+
+        Returns:
+            AlphaData with data_type='port_return' (position-level returns)
+
+        Example:
+            >>> # Full workflow
+            >>> signal = o.rank(o.ts_mean(returns, window=5))
+            >>> ae.set_scaler('DollarNeutral')
+            >>> weights = ae.to_weights(signal)
+            >>> port_return = ae.to_portfolio_returns(weights)
+
+            >>> # Analyze performance
+            >>> pnl = port_return.to_df().sum(axis=1).cumsum()
+            >>> sharpe = pnl.diff().mean() / pnl.diff().std() * np.sqrt(252)
+        """
+        return self._backtest_engine.compute_returns(weights)
+
+    def to_long_returns(self, weights: AlphaData) -> AlphaData:
+        """Compute returns for long positions only (weights > 0).
+
+        Delegates to BacktestEngine to filter and compute long-side returns.
+
+        Args:
+            weights: AlphaData with data_type='weight'
+
+        Returns:
+            AlphaData with data_type='port_return' (long positions only)
+
+        Example:
+            >>> # Separate long/short analysis
+            >>> weights = ae.to_weights(signal)
+            >>> long_return = ae.to_long_returns(weights)
+            >>> long_pnl = long_return.to_df().sum(axis=1).cumsum()
+            >>> long_sharpe = long_pnl.diff().mean() / long_pnl.diff().std() * np.sqrt(252)
+        """
+        return self._backtest_engine.compute_long_returns(weights)
+
+    def to_short_returns(self, weights: AlphaData) -> AlphaData:
+        """Compute returns for short positions only (weights < 0).
+
+        Delegates to BacktestEngine to filter and compute short-side returns.
+
+        Args:
+            weights: AlphaData with data_type='weight'
+
+        Returns:
+            AlphaData with data_type='port_return' (short positions only)
+
+        Example:
+            >>> # Separate long/short analysis
+            >>> weights = ae.to_weights(signal)
+            >>> short_return = ae.to_short_returns(weights)
+            >>> short_pnl = short_return.to_df().sum(axis=1).cumsum()
+            >>> short_sharpe = short_pnl.diff().mean() / short_pnl.diff().std() * np.sqrt(252)
+        """
+        return self._backtest_engine.compute_short_returns(weights)
