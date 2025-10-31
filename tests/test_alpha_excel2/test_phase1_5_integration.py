@@ -162,7 +162,7 @@ group:
         assert isinstance(returns, AlphaData)
         assert returns._data_type == DataType.NUMERIC
         assert returns._step_counter == 0
-        assert returns._cached is True
+        assert returns._cached is False  # Fields not cached unless record_output=True
         assert len(returns._cache) == 0
 
         # Step 2: Apply operator
@@ -249,10 +249,9 @@ group:
         op2 = TestAddOperator(universe_mask, config_manager)
         result = op2(intermediate, scalar=10)
 
-        # Verify cache inheritance includes both field (step=0) and intermediate (step=1)
-        assert len(result._cache) == 2
+        # Verify cache inheritance includes only cached intermediate (not field)
+        assert len(result._cache) == 1  # Only intermediate cached (fields not cached)
         steps = [c.step for c in result._cache]
-        assert 0 in steps  # returns field
         assert 1 in steps  # intermediate step
 
         # Verify intermediate step has correct name
@@ -280,15 +279,12 @@ group:
         op3 = TestMultiplyOperator(universe_mask, config_manager)
         result = op3(returns_plus_5, volume_plus_10)
 
-        # Verify cache inheritance from both inputs:
-        # - Field(returns) step=0
+        # Verify cache inheritance from both cached inputs (fields not cached):
         # - returns_plus_5 step=1
-        # - Field(volume) step=0 (second field)
-        # - volume_plus_10 step=1 (second intermediate)
-        assert len(result._cache) == 4
+        # - volume_plus_10 step=1
+        assert len(result._cache) == 2  # Only intermediates (fields not cached)
         steps = [c.step for c in result._cache]
-        assert steps.count(0) == 2  # Two fields
-        assert steps.count(1) == 2  # Two intermediates
+        assert steps.count(1) == 2  # Two intermediates at step 1
 
     def test_universe_masking_at_all_levels(self, field_loader, universe_mask, config_manager):
         """Test universe masking applied at field and operator levels."""
@@ -318,11 +314,15 @@ group:
         op = TestAddOperator(universe_mask, config_manager)
         result = op(returns, scalar=5)
 
-        # Verify step history updated
-        assert len(result._step_history) == 1
-        assert result._step_history[0]['step'] == 1
-        assert 'TestAddOperator' in result._step_history[0]['expr']
-        assert 'scalar=5' in result._step_history[0]['expr']
+        # Verify step history includes field load + operator
+        assert len(result._step_history) == 2
+        # First step: field load
+        assert result._step_history[0]['step'] == 0
+        assert 'Field(returns)' in result._step_history[0]['expr']
+        # Second step: operator
+        assert result._step_history[1]['step'] == 1
+        assert 'TestAddOperator' in result._step_history[1]['expr']
+        assert 'scalar=5' in result._step_history[1]['expr']
 
     def test_type_validation_enforcement(self, field_loader, universe_mask, config_manager):
         """Test type validation prevents invalid operations."""
@@ -377,15 +377,11 @@ group:
         assert final_signal._data_type == DataType.NUMERIC
         assert final_signal._step_counter == 3
 
-        # Cache should include:
-        # - Field(returns) step=0
-        # - returns_shifted step=1 (cached)
-        # - Field(volume) step=0
-        # - volume_adjusted step=2 (cached)
-        # - Field(industry) step=0
-        assert len(final_signal._cache) == 5
+        # Cache should include only explicitly cached intermediates (fields not cached):
+        # - returns_shifted step=1 (cached via record_output=True)
+        # - volume_adjusted step=2 (cached via record_output=True)
+        assert len(final_signal._cache) == 2  # Only intermediates (fields not cached)
         cached_steps = [c.step for c in final_signal._cache]
-        assert cached_steps.count(0) == 3  # Three fields
         assert 1 in cached_steps  # returns_shifted
         assert 2 in cached_steps  # volume_adjusted
 

@@ -552,6 +552,60 @@ Why it's useful:
 """)
 
     # ========================================================================
+    #  SECTION 9.5: STEP HISTORY TRACKING (Verification)
+    # ========================================================================
+
+    print_subsection("Complete Step History Verification")
+
+    print("""
+Every AlphaData object maintains complete step history from all upstream operations.
+This enables:
+  - Expression reconstruction (for debugging and logging)
+  - Computation lineage tracking
+  - Reproducibility and auditing
+
+Let's verify the 'combined' signal has complete step history:
+""")
+
+    print(f"\n[Complete Step History for 'combined']")
+    print(f"  Total steps in history: {len(combined._step_history)}")
+    print(f"  Current step counter: {combined._step_counter}")
+    print()
+
+    # Print each step in the history
+    for i, step in enumerate(combined._step_history):
+        step_num = step['step']
+        expr = step['expr']
+        op = step['op']
+        print(f"  Step {step_num} [{op}]: {expr}")
+
+    print("\n[Analysis]")
+    print(f"  [+] Step 0 appears {sum(1 for s in combined._step_history if s['step'] == 0)} times")
+    print(f"      (Field loads: 3x returns + 1x sector = 4 total)")
+    print(f"  [+] Step 1 appears {sum(1 for s in combined._step_history if s['step'] == 1)} times")
+    print(f"      (TsMean ma5, TsMean ma3, GroupRank - each at step 1 in their branches)")
+    print(f"  [+] Step 2 appears {sum(1 for s in combined._step_history if s['step'] == 2)} times")
+    print(f"      (ma5 - ma3 = momentum, sector_relative * 0.4)")
+    print(f"  [+] Step 3: Rank(momentum)")
+    print(f"  [+] Step 4: signal * 0.6")
+    print(f"  [+] Step 5: Final combination (signal * 0.6 + sector_relative * 0.4)")
+
+    print("\n[Last Step (Current Operation)]")
+    last_step = combined._step_history[-1]
+    print(f"  Step: {last_step['step']}")
+    print(f"  Expression: {last_step['expr']}")
+    print(f"  Operation: {last_step['op']}")
+
+    print("\n[Key Observations]")
+    print("""
+  [+] Complete history preserved: All upstream operations tracked
+  [+] Step 0 appears multiple times: Each field load creates step 0 entry
+  [+] Branching preserved: Both signal and sector_relative branches visible
+  [+] Merging tracked: Arithmetic operations combine histories from both operands
+  [+] Expression reconstruction: Can rebuild full computation graph from history
+""")
+
+    # ========================================================================
     #  SECTION 10: BACKTESTING (Phase 3.5 - NEW!)
     # ========================================================================
 

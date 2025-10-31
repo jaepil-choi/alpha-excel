@@ -198,8 +198,16 @@ class AlphaData(DataModel):
         self_expr = self._build_expression_string()
         new_expr = f"({self_expr} {op_name} {other_expr})"
 
-        # Create step history entry
-        new_history = self._step_history.copy()
+        # Merge step histories from both operands
+        if isinstance(other, AlphaData):
+            # AlphaData + AlphaData: merge both histories
+            new_history = self._step_history.copy()
+            new_history.extend(other._step_history)
+        else:
+            # AlphaData + scalar: only self history
+            new_history = self._step_history.copy()
+
+        # Append current operation
         new_history.append({
             'step': new_step_counter,
             'expr': new_expr,

@@ -216,6 +216,8 @@ class BaseOperator(ABC):
     def _build_step_history(self, inputs: Tuple[AlphaData, ...], params: dict) -> List[dict]:
         """Build step history for output.
 
+        Merges step histories from all inputs and appends current operation.
+
         Args:
             inputs: Tuple of AlphaData inputs
             params: Operator parameters
@@ -234,4 +236,12 @@ class BaseOperator(ABC):
         else:
             expr = f"{operator_name}({', '.join(input_exprs)})"
 
-        return [{'step': step_counter, 'expr': expr, 'op': operator_name}]
+        # Merge step histories from all inputs
+        merged_history = []
+        for inp in inputs:
+            merged_history.extend(inp._step_history)
+
+        # Append current operation
+        merged_history.append({'step': step_counter, 'expr': expr, 'op': operator_name})
+
+        return merged_history
