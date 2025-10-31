@@ -693,16 +693,14 @@ git add -A # Stages everything including unrelated changes
 ### When Creating Commits
 
 1. **Check status**: `git status` to see what changed
-2. **Review changes**: `git diff <file>` to verify changes
-3. **Check recent commits**: `git log --format=fuller -5` to see detailed message format
-4. **Stage logically**: Group related files that accomplish one thing
-5. **Write detailed message**: Follow the structured format (see above)
-6. **Stage and commit**: `git add <files> && git commit` (opens editor for detailed message)
+2. **Stage logically**: Group related files that accomplish one thing
+3. **Write detailed message**: Follow the structured format (see above)
+4. **Stage and commit**: `git add <files> && git commit -m "<msg>"`
 
 **For multi-line commits (RECOMMENDED):**
 ```powershell
 # This opens your editor for detailed commit message
-git add src/alpha_excel/ops/timeseries.py tests/test_ops/test_ts_mean.py && git commit
+git add src/alpha_excel/ops/timeseries.py tests/test_ops/test_ts_mean.py && git commit -m "<msg>"
 ```
 
 **For simple one-line commits (only for trivial changes):**
@@ -727,8 +725,3 @@ git add docs/typo_fix.md && git commit -m "docs: fix typo in README"
 - Document test coverage (e.g., "Tests: 10 passing")
 - Explain design decisions if relevant
 - Use present tense for descriptions
-
-**Footer:**
-- Include Claude Code attribution (if AI-assisted)
-- `🤖 Generated with [Claude Code](https://claude.com/claude-code)`
-- `Co-Authored-By: Claude <noreply@anthropic.com>`
