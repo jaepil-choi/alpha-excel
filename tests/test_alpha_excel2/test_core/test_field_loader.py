@@ -113,7 +113,7 @@ group:
         assert isinstance(result, AlphaData)
         assert result._data_type == DataType.NUMERIC
         assert result._step_counter == 0
-        assert result._cached is True
+        assert result._cached is False  # Fields not cached unless record_output=True
         assert len(result._cache) == 0
         assert len(result._step_history) == 1
         assert result._step_history[0]['expr'] == 'Field(returns)'

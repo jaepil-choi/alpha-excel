@@ -43,7 +43,7 @@ def mock_field_loader():
         data=returns_df,
         data_type='numeric',
         step_counter=0,
-        cached=True,
+        cached=False,  # Fields not cached unless record_output=True
         cache=[],
         step_history=[{'step': 0, 'expr': 'Field(returns)', 'op': 'field'}]
     )

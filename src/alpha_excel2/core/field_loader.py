@@ -121,12 +121,14 @@ class FieldLoader:
         if preprocessing_config.get('forward_fill', False):
             data_df = data_df.ffill()
 
-        # Step 6: Construct AlphaData(step=0, cached=True)
+        # Step 6: Construct AlphaData(step=0, cached=False)
+        # Fields are NOT cached in step history unless explicitly requested
+        # (FieldLoader has separate internal cache for performance optimization)
         alpha_data = AlphaData(
             data=data_df,
             data_type=data_type,
             step_counter=0,
-            cached=True,
+            cached=False,
             cache=[],
             step_history=[{'step': 0, 'expr': f'Field({name})', 'op': 'field'}]
         )
