@@ -1493,3 +1493,247 @@ This section provides a high-level summary of the implementation phases:
 - **Transition Plan**: `docs/vibe_coding/alpha-excel/ae2-transition-plan.md` - v1.0 problems and solutions
 - **Group Operations**: `docs/research/faster-group-operations.md` - NumPy scatter-gather details
 - **v1.0 Architecture**: `docs/vibe_coding/alpha-excel/ae-architecture.md` - For comparison
+
+---
+
+## 2.7. Known Issues and Future Refactoring
+
+### Issue: Cache Inheritance Memory Duplication
+
+**Status**: ⚠️ Known architectural limitation in current implementation (Phase 3.4)
+
+**Problem Description:**
+
+The current cache inheritance mechanism creates exponential memory duplication through copy semantics. When a cached computation step is used in subsequent operations, the cache is **copied** to each new data object rather than shared or moved.
+
+**Example:**
+```python
+# Single cached step leads to N copies in a chain of N operations
+signal1 = ts_mean(f('returns'), 3, record_output=True)  # 1 copy
+signal2 = 3 + signal1   # 2 copies (original + inherited copy)
+signal3 = 1 + signal2   # 3 copies (original + 2 inherited copies)
+signal4 = signal3 * 2   # 4 copies (original + 3 inherited copies)
+```
+
+**Memory Growth Pattern:**
+- With M cached steps and N downstream operations: **O(M × N) memory duplication**
+- Long computation chains (10+ operations) can cause significant memory consumption
+- Each cached DataFrame is duplicated at every downstream operation
+- Particularly problematic with large DataFrames (high T × N dimensions)
+
+**Root Cause:**
+
+The cache inheritance uses **copy semantics** to ensure each data object has access to upstream cached steps. When operators combine multiple inputs, they merge caches by copying all upstream cache entries into the result object. This creates a tree-like explosion of cache copies as computation chains grow deeper.
+
+**Impact:**
+- Memory usage grows quadratically with computation depth
+- Long-running research sessions may hit memory limits
+- Large-scale backtests with many intermediate signals affected
+- Garbage collection pressure increases with chain depth
+
+---
+
+### Proposed Solution: Central Cache Repository Pattern
+
+**Design Philosophy:**
+
+Move cache storage from individual data objects to a centralized **infrastructure component** that manages cached computation steps independently of the data flow. This follows the **Separation of Concerns** principle: data objects represent computation results and metadata, while a cache manager handles lifecycle and storage.
+
+**Architectural Pattern:**
+
+```
+Current (Distributed):
+  AlphaData1._cache → [CachedStep, ...]
+  AlphaData2._cache → [CachedStep, ...] (copies from AlphaData1)
+  AlphaData3._cache → [CachedStep, ...] (copies from AlphaData2)
+  → O(N) copies for N operations
+
+Proposed (Centralized):
+  CacheManager._cache → {step_id: CachedStep}
+  AlphaData1, AlphaData2, AlphaData3 → Reference to CacheManager
+  → Single copy, O(1) access via proxy
+```
+
+**Key Design Principles:**
+
+1. **Single Source of Truth**: Cache stored once in central manager
+2. **Dependency Injection**: Cache manager injected into components (follows v2.0 finer-grained DI pattern)
+3. **Separation of Concerns**: Data model = computation + metadata, Cache manager = infrastructure
+4. **Proxy Pattern**: Data objects delegate cache access to manager
+5. **Predictable Lifetime**: Cache persists until manager cleared, independent of data object lifecycle
+
+**Conceptual Components:**
+
+- **Cache Manager**: Central repository with registration and retrieval interface
+- **Data Model**: Removes internal cache storage, holds reference to manager
+- **Operator Pipeline**: Registers cached steps with manager instead of copying
+- **Facade**: Creates and wires cache manager to components
+
+**Benefits:**
+
+- **Memory Efficiency**: O(M × N) → O(M) reduction (potentially 10-100x for long chains)
+- **Predictable Behavior**: Cache survives regardless of variable assignment patterns (e.g., temporary expressions don't wipe cache)
+- **Extensibility Foundation**: Enables future features (LRU eviction, memory limits, persistence, cache statistics)
+- **Architectural Alignment**: Reinforces v2.0's finer-grained dependency injection and separation of concerns
+
+---
+
+### Breaking Changes Analysis
+
+**Internal Architecture Changes:**
+
+This refactoring requires significant changes to internal architecture:
+
+1. **Data Model Refactoring**: Remove cache storage attributes, add cache manager reference
+2. **Operator Pipeline Refactoring**: Replace cache copying with cache registration
+3. **Dependency Injection Updates**: Add cache manager to component constructor signatures
+4. **Access Pattern Change**: Proxy method delegates to central manager
+
+**External API Preservation:**
+
+Despite internal changes, the **user-facing API remains unchanged**:
+
+✅ `signal.get_cached_step(step_id)` - Still works (proxy to manager)
+✅ `o.ts_mean(returns, 3, record_output=True)` - Unchanged syntax
+✅ Cache semantics preserved - Same behavior from user perspective
+✅ All showcase examples continue to work without modification
+
+**Why This is Breaking Internally:**
+
+- Component constructor signatures change (new dependency)
+- Data model internal structure changes (no `_cache` attribute)
+- Operator inheritance logic removed (no `_inherit_caches()` method)
+- Test fixtures need updates (cache manager injection)
+
+**Migration Strategy:**
+
+Use **Proxy Pattern** to maintain API compatibility:
+- External: `signal.get_cached_step(1)` (unchanged)
+- Internal: Method proxies to `cache_manager.get(1)`
+- Transparent to users, seamless migration
+
+---
+
+### Alternative Approaches Evaluation
+
+**Option A: Mutation-Based Cache Transfer** ❌ Rejected
+
+**Concept**: Move cache from source to destination, clearing source after transfer.
+
+**Implementation**: When creating new data object, take cache from input and set input's cache to empty.
+
+**Pros:**
+- Eliminates duplication immediately
+- Minimal code changes (2-3 lines)
+- Simple to understand
+
+**Cons:**
+- **Critical Flaw**: Breaks temporary expressions
+  ```python
+  signal1 = ts_mean(returns, 3, record_output=True)
+  temp = signal1 + 4  # This WIPES signal1's cache!
+  signal2 = signal1 * 2  # Cache is gone
+  ```
+- **Unpredictable Behavior**: Cache survival depends on variable assignment order
+- **Violates Immutability**: Mutates objects unexpectedly
+- **Hard to Debug**: "Why did my cache disappear?" becomes a common question
+
+**Architectural Assessment**: Violates principle of predictable behavior. Creates "action at a distance" where cache lifetime depends on seemingly unrelated operations.
+
+**Verdict**: ❌ **Rejected** - Too many sharp edges, unpredictable semantics
+
+---
+
+**Option B: Central Cache Repository** ✅ Recommended
+
+**Concept**: Store cache in separate infrastructure component, data objects hold reference.
+
+**Implementation**: Create cache manager as singleton-like component, inject via dependency injection.
+
+**Pros:**
+- **Zero Duplication**: Single copy per cached step (O(M) memory)
+- **Predictable Lifetime**: Cache persists until explicit clear
+- **Architectural Alignment**: Follows v2.0 finer-grained DI pattern
+- **Separation of Concerns**: Data vs infrastructure clearly separated
+- **Extensible**: Foundation for LRU, memory limits, persistence
+- **Preserves API**: User-facing interface unchanged (proxy pattern)
+
+**Cons:**
+- Moderate implementation effort (~4-6 hours)
+- Internal breaking changes (component signatures)
+- Requires test updates (~20-30 fixtures)
+
+**Architectural Assessment**:
+- Aligns with **Single Responsibility Principle** (data model handles data, cache manager handles caching)
+- Follows **Dependency Injection** pattern already established in v2.0
+- Maintains **Open/Closed Principle** (extensible without modifying data model)
+- Clean separation enables **Independent Testing** of cache strategies
+
+**Verdict**: ✅ **Strongly Recommended** - Best alignment with architectural principles
+
+---
+
+### Implementation Strategy (Abstract)
+
+**Phase: Post-MVP** (After Phase 4 completion)
+
+**High-Level Approach:**
+
+1. **Introduce Cache Manager**
+   - Create separate infrastructure component for cache storage
+   - Provide registration interface (`register(step_id, name, data)`)
+   - Provide retrieval interface (`get(step_id)`)
+   - Implement clear/reset capabilities
+
+2. **Refactor Data Model**
+   - Remove internal cache storage mechanism
+   - Add reference to cache manager (optional, for proxy access)
+   - Implement proxy method that delegates to manager
+   - Maintain `record_output` parameter semantics
+
+3. **Update Operator Pipeline**
+   - Remove cache copying/inheritance logic
+   - Add registration call when `record_output=True`
+   - Pass cache manager reference via dependency injection
+   - Simplify step construction (no cache merging needed)
+
+4. **Wire Dependencies**
+   - Create cache manager in facade initialization
+   - Inject into field loader (for field caching)
+   - Inject into operator registry (for operator caching)
+   - Optionally expose to users (e.g., `ae.cache.clear()`)
+
+5. **Preserve API Compatibility**
+   - Use proxy pattern in data model's `get_cached_step()`
+   - Maintain all existing method signatures for users
+   - Update only internal component constructors
+   - Ensure showcase examples work without changes
+
+**Expected Outcomes:**
+
+- **Memory**: O(M×N) → O(M) reduction in cache memory usage
+- **Performance**: Minimal impact (dictionary lookup vs list search)
+- **Maintainability**: Clearer separation of concerns
+- **Extensibility**: Foundation for advanced cache strategies
+
+**Future Enhancements Enabled:**
+
+- **Memory Limits**: Automatic eviction when cache exceeds threshold
+- **LRU Eviction**: Keep only recently accessed cached steps
+- **Cache Statistics**: Memory usage, hit rates, access patterns
+- **Persistence**: Save/load cache between sessions
+- **Shared Caching**: Multiple facade instances share cache
+
+---
+
+### Conclusion
+
+The cache inheritance memory duplication is a **known architectural limitation** that stems from the current distributed cache storage design. While it doesn't impact the external API, it can cause significant memory consumption in long computation chains.
+
+The **Central Cache Repository pattern** is the recommended solution because it:
+1. Eliminates duplication completely (O(M×N) → O(M))
+2. Aligns with v2.0 architectural principles (finer-grained DI, separation of concerns)
+3. Preserves user-facing API through proxy pattern
+4. Provides foundation for future enhancements
+
+This refactoring is planned for **post-MVP** implementation, after core functionality is stable and thoroughly tested. The current implementation is sufficient for typical research workflows but should be monitored for memory consumption in production use cases with deep computation chains.
