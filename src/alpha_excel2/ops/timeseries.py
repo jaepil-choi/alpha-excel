@@ -552,3 +552,382 @@ class TsAll(BaseOperator):
         result = result.where(~count_true.isna(), np.nan)
 
         return result
+
+
+class TsProduct(BaseOperator):
+    """Rolling time-series product operator.
+
+    Computes the rolling product over a specified time window.
+    Useful for calculating compound returns.
+
+    Example:
+        # Compound returns over 20 days
+        # If daily_returns = 1 + returns, then:
+        compound = o.ts_product(daily_returns, window=20)
+
+        # Calculate 5-day compound return
+        gross_returns = 1 + returns  # Convert returns to gross returns
+        compound_5d = o.ts_product(gross_returns, window=5)
+
+    Config:
+        min_periods_ratio (float): Minimum fraction of window that must have
+            valid (non-NaN) values. Default: 0.6 from operators.yaml.
+
+    Note:
+        - Uses rolling.apply with product calculation
+        - More conservative min_periods (0.6) for compound calculation
+    """
+
+    input_types = ['numeric']
+    output_type = 'numeric'
+    prefer_numpy = False  # Use pandas rolling (C-optimized)
+
+    def compute(self, data: pd.DataFrame, window: int, **params) -> pd.DataFrame:
+        """Compute rolling product.
+
+        Args:
+            data: Input DataFrame (T, N) with time on rows, assets on columns
+            window: Rolling window size (number of periods)
+            **params: Additional parameters (currently unused)
+
+        Returns:
+            DataFrame with rolling product values
+
+        Raises:
+            ValueError: If window is not a positive integer
+        """
+        if not isinstance(window, int) or window < 1:
+            raise ValueError(f"window must be a positive integer, got {window}")
+
+        # Get min_periods_ratio from config (default 0.6 - conservative for compound)
+        try:
+            operator_config = self._config_manager.get_operator_config('TsProduct')
+            min_periods_ratio = operator_config.get('min_periods_ratio', 0.6)
+        except KeyError:
+            min_periods_ratio = 0.6
+
+        # Calculate min_periods: at least 1, at most window
+        min_periods = max(1, int(window * min_periods_ratio))
+
+        # Compute rolling product using apply
+        return data.rolling(window=window, min_periods=min_periods).apply(
+            lambda x: x.prod(), raw=True
+        )
+
+
+class TsArgMax(BaseOperator):
+    """Time-series argmax operator (days ago when maximum occurred).
+
+    Returns the number of days ago when the rolling maximum value occurred.
+    0 = today (most recent), 1 = yesterday, etc.
+
+    Example:
+        # Find when 20-day high occurred
+        high_timing = o.ts_argmax(close, window=20)
+        # Result: 0 = new high today, 19 = high was 19 days ago
+
+        # Detect new highs (when argmax == 0)
+        new_high = high_timing == 0
+
+        # Detect breakout recency
+        recent_high = high_timing <= 5  # High within last 5 days
+
+    Config:
+        min_periods_ratio (float): Minimum fraction of window that must have
+            valid (non-NaN) values. Default: 0.5 from operators.yaml.
+
+    Note:
+        - Returns integer values [0, window-1]
+        - 0 means maximum occurred today (most recent period)
+        - window-1 means maximum occurred at oldest period in window
+        - Uses nanargmax to handle NaN values in window
+    """
+
+    input_types = ['numeric']
+    output_type = 'numeric'
+    prefer_numpy = False  # Use pandas rolling (C-optimized)
+
+    def compute(self, data: pd.DataFrame, window: int, **params) -> pd.DataFrame:
+        """Compute days ago when rolling maximum occurred.
+
+        Args:
+            data: Input DataFrame (T, N) with time on rows, assets on columns
+            window: Rolling window size (number of periods)
+            **params: Additional parameters (currently unused)
+
+        Returns:
+            DataFrame with days-ago indices (0 = today, window-1 = oldest)
+
+        Raises:
+            ValueError: If window is not a positive integer
+        """
+        import numpy as np
+
+        if not isinstance(window, int) or window < 1:
+            raise ValueError(f"window must be a positive integer, got {window}")
+
+        # Get min_periods_ratio from config (default 0.5)
+        try:
+            operator_config = self._config_manager.get_operator_config('TsArgMax')
+            min_periods_ratio = operator_config.get('min_periods_ratio', 0.5)
+        except KeyError:
+            min_periods_ratio = 0.5
+
+        # Calculate min_periods: at least 1, at most window
+        min_periods = max(1, int(window * min_periods_ratio))
+
+        def argmax_days_ago(window_vals):
+            """Convert argmax to days ago (0=today, window-1=oldest)."""
+            if len(window_vals) == 0 or np.all(np.isnan(window_vals)):
+                return np.nan
+            abs_idx = np.nanargmax(window_vals)
+            # Convert absolute index to days ago
+            # Most recent value is at index -1, so days_ago = len - 1 - abs_idx
+            return len(window_vals) - 1 - abs_idx
+
+        # Compute rolling argmax using apply
+        return data.rolling(window=window, min_periods=min_periods).apply(
+            argmax_days_ago, raw=True
+        )
+
+
+class TsArgMin(BaseOperator):
+    """Time-series argmin operator (days ago when minimum occurred).
+
+    Returns the number of days ago when the rolling minimum value occurred.
+    0 = today (most recent), 1 = yesterday, etc.
+
+    Example:
+        # Find when 20-day low occurred
+        low_timing = o.ts_argmin(close, window=20)
+        # Result: 0 = new low today, 19 = low was 19 days ago
+
+        # Detect new lows (when argmin == 0)
+        new_low = low_timing == 0
+
+        # Detect breakdown recency
+        recent_low = low_timing <= 5  # Low within last 5 days
+
+    Config:
+        min_periods_ratio (float): Minimum fraction of window that must have
+            valid (non-NaN) values. Default: 0.5 from operators.yaml.
+
+    Note:
+        - Returns integer values [0, window-1]
+        - 0 means minimum occurred today (most recent period)
+        - window-1 means minimum occurred at oldest period in window
+        - Uses nanargmin to handle NaN values in window
+    """
+
+    input_types = ['numeric']
+    output_type = 'numeric'
+    prefer_numpy = False  # Use pandas rolling (C-optimized)
+
+    def compute(self, data: pd.DataFrame, window: int, **params) -> pd.DataFrame:
+        """Compute days ago when rolling minimum occurred.
+
+        Args:
+            data: Input DataFrame (T, N) with time on rows, assets on columns
+            window: Rolling window size (number of periods)
+            **params: Additional parameters (currently unused)
+
+        Returns:
+            DataFrame with days-ago indices (0 = today, window-1 = oldest)
+
+        Raises:
+            ValueError: If window is not a positive integer
+        """
+        import numpy as np
+
+        if not isinstance(window, int) or window < 1:
+            raise ValueError(f"window must be a positive integer, got {window}")
+
+        # Get min_periods_ratio from config (default 0.5)
+        try:
+            operator_config = self._config_manager.get_operator_config('TsArgMin')
+            min_periods_ratio = operator_config.get('min_periods_ratio', 0.5)
+        except KeyError:
+            min_periods_ratio = 0.5
+
+        # Calculate min_periods: at least 1, at most window
+        min_periods = max(1, int(window * min_periods_ratio))
+
+        def argmin_days_ago(window_vals):
+            """Convert argmin to days ago (0=today, window-1=oldest)."""
+            if len(window_vals) == 0 or np.all(np.isnan(window_vals)):
+                return np.nan
+            abs_idx = np.nanargmin(window_vals)
+            # Convert absolute index to days ago
+            # Most recent value is at index -1, so days_ago = len - 1 - abs_idx
+            return len(window_vals) - 1 - abs_idx
+
+        # Compute rolling argmin using apply
+        return data.rolling(window=window, min_periods=min_periods).apply(
+            argmin_days_ago, raw=True
+        )
+
+
+class TsCorr(BaseOperator):
+    """Time-series rolling correlation operator.
+
+    Computes the rolling Pearson correlation coefficient between two time series.
+    Correlation range: [-1, +1] where:
+    - corr = +1: Perfect positive linear relationship
+    - corr = -1: Perfect negative linear relationship
+    - corr = 0: No linear relationship
+
+    Example:
+        # Calculate rolling correlation between stock and market
+        stock_returns = f('returns')
+        market_returns = f('market_returns')
+        beta_proxy = o.ts_corr(stock_returns, market_returns, window=20)
+
+        # Identify highly correlated pairs
+        correlation = o.ts_corr(stock_a, stock_b, window=60)
+        highly_correlated = correlation > 0.8
+
+    Config:
+        min_periods_ratio (float): Minimum fraction of window that must have
+            valid (non-NaN) values. Default: 0.7 (conservative for correlation).
+
+    Note:
+        - Dual-input operator (takes two time series)
+        - Processes column-by-column
+        - More conservative min_periods for statistical reliability
+    """
+
+    input_types = ['numeric', 'numeric']
+    output_type = 'numeric'
+    prefer_numpy = False  # Use pandas rolling (C-optimized)
+
+    def compute(self, left: pd.DataFrame, right: pd.DataFrame, window: int, **params) -> pd.DataFrame:
+        """Compute rolling Pearson correlation.
+
+        Args:
+            left: First input DataFrame (T, N) - X series
+            right: Second input DataFrame (T, N) - Y series
+            window: Rolling window size (number of periods)
+            **params: Additional parameters (currently unused)
+
+        Returns:
+            DataFrame with rolling correlation values
+
+        Raises:
+            ValueError: If window is not a positive integer
+        """
+        if not isinstance(window, int) or window < 1:
+            raise ValueError(f"window must be a positive integer, got {window}")
+
+        # Get min_periods_ratio from config (default 0.7 - conservative for correlation)
+        try:
+            operator_config = self._config_manager.get_operator_config('TsCorr')
+            min_periods_ratio = operator_config.get('min_periods_ratio', 0.7)
+        except KeyError:
+            min_periods_ratio = 0.7
+
+        # Calculate min_periods: at least 1, at most window
+        min_periods = max(1, int(window * min_periods_ratio))
+
+        # Initialize result DataFrame
+        result = pd.DataFrame(
+            index=left.index,
+            columns=left.columns,
+            dtype=float
+        )
+
+        # Compute correlation for each column independently
+        for col in left.columns:
+            left_series = left[col]
+            right_series = right[col]
+
+            # Use pandas rolling corr
+            result[col] = left_series.rolling(
+                window=window,
+                min_periods=min_periods
+            ).corr(right_series)
+
+        return result
+
+
+class TsCovariance(BaseOperator):
+    """Time-series rolling covariance operator.
+
+    Computes the rolling covariance between two time series.
+    Covariance measures how two variables move together:
+    - cov > 0: Variables tend to move in the same direction
+    - cov < 0: Variables tend to move in opposite directions
+    - cov = 0: No linear relationship
+
+    Example:
+        # Calculate rolling covariance for risk estimation
+        stock_returns = f('returns')
+        market_returns = f('market_returns')
+        cov = o.ts_covariance(stock_returns, market_returns, window=20)
+
+        # Portfolio risk calculation
+        asset_a = f('returns_a')
+        asset_b = f('returns_b')
+        covariance = o.ts_covariance(asset_a, asset_b, window=60)
+
+    Config:
+        min_periods_ratio (float): Minimum fraction of window that must have
+            valid (non-NaN) values. Default: 0.7 (conservative for covariance).
+
+    Note:
+        - Dual-input operator (takes two time series)
+        - Processes column-by-column
+        - More conservative min_periods for statistical reliability
+        - Covariance units depend on input units (unlike correlation [-1,+1])
+    """
+
+    input_types = ['numeric', 'numeric']
+    output_type = 'numeric'
+    prefer_numpy = False  # Use pandas rolling (C-optimized)
+
+    def compute(self, left: pd.DataFrame, right: pd.DataFrame, window: int, **params) -> pd.DataFrame:
+        """Compute rolling covariance.
+
+        Args:
+            left: First input DataFrame (T, N) - X series
+            right: Second input DataFrame (T, N) - Y series
+            window: Rolling window size (number of periods)
+            **params: Additional parameters (currently unused)
+
+        Returns:
+            DataFrame with rolling covariance values
+
+        Raises:
+            ValueError: If window is not a positive integer
+        """
+        if not isinstance(window, int) or window < 1:
+            raise ValueError(f"window must be a positive integer, got {window}")
+
+        # Get min_periods_ratio from config (default 0.7 - conservative for covariance)
+        try:
+            operator_config = self._config_manager.get_operator_config('TsCovariance')
+            min_periods_ratio = operator_config.get('min_periods_ratio', 0.7)
+        except KeyError:
+            min_periods_ratio = 0.7
+
+        # Calculate min_periods: at least 1, at most window
+        min_periods = max(1, int(window * min_periods_ratio))
+
+        # Initialize result DataFrame
+        result = pd.DataFrame(
+            index=left.index,
+            columns=left.columns,
+            dtype=float
+        )
+
+        # Compute covariance for each column independently
+        for col in left.columns:
+            left_series = left[col]
+            right_series = right[col]
+
+            # Use pandas rolling cov
+            result[col] = left_series.rolling(
+                window=window,
+                min_periods=min_periods
+            ).cov(right_series)
+
+        return result

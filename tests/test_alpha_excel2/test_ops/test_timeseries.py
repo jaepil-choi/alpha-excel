@@ -3,7 +3,10 @@
 import pytest
 import pandas as pd
 import numpy as np
-from alpha_excel2.ops.timeseries import TsMean, TsCountNans, TsAny, TsAll
+from alpha_excel2.ops.timeseries import (
+    TsMean, TsCountNans, TsAny, TsAll,
+    TsProduct, TsArgMax, TsArgMin, TsCorr, TsCovariance
+)
 from alpha_excel2.core.alpha_data import AlphaData
 from alpha_excel2.core.universe_mask import UniverseMask
 from alpha_excel2.core.config_manager import ConfigManager
@@ -727,4 +730,628 @@ class TestTsAll:
 
         assert isinstance(result, AlphaData)
         assert result._data_type == DataType.BOOLEAN
+        assert result._step_counter == 1
+
+
+class TestTsProduct:
+    """Tests for TsProduct operator."""
+
+    @pytest.fixture
+    def dates(self):
+        """Sample dates."""
+        return pd.date_range('2023-01-01', periods=10, freq='D')
+
+    @pytest.fixture
+    def securities(self):
+        """Sample security IDs."""
+        return ['AAPL', 'MSFT', 'GOOGL']
+
+    @pytest.fixture
+    def universe_mask(self, dates, securities):
+        """Universe mask."""
+        mask_data = pd.DataFrame(
+            [[True, True, True]] * 10,
+            index=dates,
+            columns=securities
+        )
+        return UniverseMask(mask_data)
+
+    @pytest.fixture
+    def config_manager(self, tmp_path):
+        """Config manager."""
+        return ConfigManager(str(tmp_path))
+
+    def test_product_basic(self, dates, securities, universe_mask, config_manager):
+        """Test basic rolling product."""
+        # Gross returns: 1.1, 1.2, 1.05, etc.
+        data = pd.DataFrame(
+            [[1.1, 1.0, 0.9],
+             [1.2, 1.1, 1.0],
+             [1.05, 1.05, 1.1],
+             [1.0, 1.0, 1.0],
+             [0.95, 0.9, 1.05]],
+            index=dates[:5],
+            columns=securities
+        )
+        alpha_data = AlphaData(data, data_type=DataType.NUMERIC)
+
+        op = TsProduct(universe_mask, config_manager)
+        result = op(alpha_data, window=3)
+
+        # Row 2: AAPL window [1.1, 1.2, 1.05] → product = 1.386
+        expected_aapl = 1.1 * 1.2 * 1.05
+        assert np.isclose(result._data.iloc[2, 0], expected_aapl)
+
+    def test_product_with_nans(self, dates, securities, universe_mask, config_manager):
+        """Test rolling product with NaN values."""
+        data = pd.DataFrame(
+            [[1.1, 1.0, 0.9],
+             [1.2, np.nan, 1.0],
+             [1.05, 1.05, np.nan],
+             [1.0, 1.0, 1.0]],
+            index=dates[:4],
+            columns=securities
+        )
+        alpha_data = AlphaData(data, data_type=DataType.NUMERIC)
+
+        op = TsProduct(universe_mask, config_manager)
+        result = op(alpha_data, window=3)
+
+        # NaN handling
+        assert pd.isna(result._data.iloc[2, 2])  # GOOGL has NaN in window
+
+    def test_product_invalid_window(self, dates, securities, universe_mask, config_manager):
+        """Test that invalid window raises error."""
+        data = pd.DataFrame(
+            [[1.1, 1.0, 0.9]],
+            index=dates[:1],
+            columns=securities
+        )
+        alpha_data = AlphaData(data, data_type=DataType.NUMERIC)
+
+        op = TsProduct(universe_mask, config_manager)
+
+        with pytest.raises(ValueError, match="window must be a positive integer"):
+            op(alpha_data, window=0)
+
+    def test_product_output_type(self, dates, securities, universe_mask, config_manager):
+        """Test that output has correct type."""
+        data = pd.DataFrame(
+            [[1.1, 1.0, 0.9],
+             [1.2, 1.1, 1.0],
+             [1.05, 1.05, 1.1]],
+            index=dates[:3],
+            columns=securities
+        )
+        alpha_data = AlphaData(data, data_type=DataType.NUMERIC)
+
+        op = TsProduct(universe_mask, config_manager)
+        result = op(alpha_data, window=2)
+
+        assert isinstance(result, AlphaData)
+        assert result._data_type == DataType.NUMERIC
+        assert result._step_counter == 1
+
+
+class TestTsArgMax:
+    """Tests for TsArgMax operator."""
+
+    @pytest.fixture
+    def dates(self):
+        """Sample dates."""
+        return pd.date_range('2023-01-01', periods=10, freq='D')
+
+    @pytest.fixture
+    def securities(self):
+        """Sample security IDs."""
+        return ['AAPL', 'MSFT', 'GOOGL']
+
+    @pytest.fixture
+    def universe_mask(self, dates, securities):
+        """Universe mask."""
+        mask_data = pd.DataFrame(
+            [[True, True, True]] * 10,
+            index=dates,
+            columns=securities
+        )
+        return UniverseMask(mask_data)
+
+    @pytest.fixture
+    def config_manager(self, tmp_path):
+        """Config manager."""
+        return ConfigManager(str(tmp_path))
+
+    def test_argmax_basic(self, dates, securities, universe_mask, config_manager):
+        """Test basic argmax functionality."""
+        data = pd.DataFrame(
+            [[100, 50, 30],   # Day 0
+             [110, 55, 35],   # Day 1
+             [105, 60, 32],   # Day 2 - max for AAPL at day 1 (1 day ago)
+             [108, 58, 38],   # Day 3
+             [120, 62, 40]],  # Day 4 - max for AAPL at day 4 (0 days ago)
+            index=dates[:5],
+            columns=securities
+        )
+        alpha_data = AlphaData(data, data_type=DataType.NUMERIC)
+
+        op = TsArgMax(universe_mask, config_manager)
+        result = op(alpha_data, window=3)
+
+        # Row 2: AAPL window [100, 110, 105], max=110 at position 1 (middle)
+        # days_ago = len(window) - 1 - abs_idx = 3 - 1 - 1 = 1
+        assert result._data.iloc[2, 0] == 1.0
+
+        # Row 4: AAPL window [105, 108, 120], max=120 at position 2 (most recent)
+        # days_ago = 3 - 1 - 2 = 0
+        assert result._data.iloc[4, 0] == 0.0
+
+    def test_argmax_with_nans(self, dates, securities, universe_mask, config_manager):
+        """Test argmax with NaN values."""
+        data = pd.DataFrame(
+            [[100, 50, 30],
+             [110, np.nan, 35],
+             [105, 60, np.nan],
+             [108, 58, 38]],
+            index=dates[:4],
+            columns=securities
+        )
+        alpha_data = AlphaData(data, data_type=DataType.NUMERIC)
+
+        op = TsArgMax(universe_mask, config_manager)
+        result = op(alpha_data, window=3)
+
+        # Should handle NaN properly using nanargmax
+        assert not pd.isna(result._data.iloc[2, 0])  # AAPL has valid values
+
+    def test_argmax_invalid_window(self, dates, securities, universe_mask, config_manager):
+        """Test that invalid window raises error."""
+        data = pd.DataFrame(
+            [[100, 50, 30]],
+            index=dates[:1],
+            columns=securities
+        )
+        alpha_data = AlphaData(data, data_type=DataType.NUMERIC)
+
+        op = TsArgMax(universe_mask, config_manager)
+
+        with pytest.raises(ValueError, match="window must be a positive integer"):
+            op(alpha_data, window=-5)
+
+    def test_argmax_output_type(self, dates, securities, universe_mask, config_manager):
+        """Test that output has correct type."""
+        data = pd.DataFrame(
+            [[100, 50, 30],
+             [110, 55, 35],
+             [105, 60, 32]],
+            index=dates[:3],
+            columns=securities
+        )
+        alpha_data = AlphaData(data, data_type=DataType.NUMERIC)
+
+        op = TsArgMax(universe_mask, config_manager)
+        result = op(alpha_data, window=2)
+
+        assert isinstance(result, AlphaData)
+        assert result._data_type == DataType.NUMERIC
+        assert result._step_counter == 1
+
+
+class TestTsArgMin:
+    """Tests for TsArgMin operator."""
+
+    @pytest.fixture
+    def dates(self):
+        """Sample dates."""
+        return pd.date_range('2023-01-01', periods=10, freq='D')
+
+    @pytest.fixture
+    def securities(self):
+        """Sample security IDs."""
+        return ['AAPL', 'MSFT', 'GOOGL']
+
+    @pytest.fixture
+    def universe_mask(self, dates, securities):
+        """Universe mask."""
+        mask_data = pd.DataFrame(
+            [[True, True, True]] * 10,
+            index=dates,
+            columns=securities
+        )
+        return UniverseMask(mask_data)
+
+    @pytest.fixture
+    def config_manager(self, tmp_path):
+        """Config manager."""
+        return ConfigManager(str(tmp_path))
+
+    def test_argmin_basic(self, dates, securities, universe_mask, config_manager):
+        """Test basic argmin functionality."""
+        data = pd.DataFrame(
+            [[100, 50, 30],   # Day 0
+             [90, 55, 35],    # Day 1 - min for AAPL
+             [105, 60, 32],   # Day 2 - min at day 1 (1 day ago)
+             [88, 58, 38],    # Day 3
+             [95, 62, 40]],   # Day 4 - min at day 3 (1 day ago)
+            index=dates[:5],
+            columns=securities
+        )
+        alpha_data = AlphaData(data, data_type=DataType.NUMERIC)
+
+        op = TsArgMin(universe_mask, config_manager)
+        result = op(alpha_data, window=3)
+
+        # Row 2: AAPL window [100, 90, 105], min=90 at position 1
+        # days_ago = 3 - 1 - 1 = 1
+        assert result._data.iloc[2, 0] == 1.0
+
+        # Row 4: AAPL window [105, 88, 95], min=88 at position 1
+        # days_ago = 3 - 1 - 1 = 1
+        assert result._data.iloc[4, 0] == 1.0
+
+    def test_argmin_with_nans(self, dates, securities, universe_mask, config_manager):
+        """Test argmin with NaN values."""
+        data = pd.DataFrame(
+            [[100, 50, 30],
+             [90, np.nan, 35],
+             [105, 60, np.nan],
+             [88, 58, 38]],
+            index=dates[:4],
+            columns=securities
+        )
+        alpha_data = AlphaData(data, data_type=DataType.NUMERIC)
+
+        op = TsArgMin(universe_mask, config_manager)
+        result = op(alpha_data, window=3)
+
+        # Should handle NaN properly using nanargmin
+        assert not pd.isna(result._data.iloc[2, 0])  # AAPL has valid values
+
+    def test_argmin_invalid_window(self, dates, securities, universe_mask, config_manager):
+        """Test that invalid window raises error."""
+        data = pd.DataFrame(
+            [[100, 50, 30]],
+            index=dates[:1],
+            columns=securities
+        )
+        alpha_data = AlphaData(data, data_type=DataType.NUMERIC)
+
+        op = TsArgMin(universe_mask, config_manager)
+
+        with pytest.raises(ValueError, match="window must be a positive integer"):
+            op(alpha_data, window=0)
+
+    def test_argmin_output_type(self, dates, securities, universe_mask, config_manager):
+        """Test that output has correct type."""
+        data = pd.DataFrame(
+            [[100, 50, 30],
+             [90, 55, 35],
+             [105, 60, 32]],
+            index=dates[:3],
+            columns=securities
+        )
+        alpha_data = AlphaData(data, data_type=DataType.NUMERIC)
+
+        op = TsArgMin(universe_mask, config_manager)
+        result = op(alpha_data, window=2)
+
+        assert isinstance(result, AlphaData)
+        assert result._data_type == DataType.NUMERIC
+        assert result._step_counter == 1
+
+
+class TestTsCorr:
+    """Tests for TsCorr operator (dual-input)."""
+
+    @pytest.fixture
+    def dates(self):
+        """Sample dates."""
+        return pd.date_range('2023-01-01', periods=10, freq='D')
+
+    @pytest.fixture
+    def securities(self):
+        """Sample security IDs."""
+        return ['AAPL', 'MSFT', 'GOOGL']
+
+    @pytest.fixture
+    def universe_mask(self, dates, securities):
+        """Universe mask."""
+        mask_data = pd.DataFrame(
+            [[True, True, True]] * 10,
+            index=dates,
+            columns=securities
+        )
+        return UniverseMask(mask_data)
+
+    @pytest.fixture
+    def config_manager(self, tmp_path):
+        """Config manager."""
+        return ConfigManager(str(tmp_path))
+
+    def test_corr_basic(self, dates, securities, universe_mask, config_manager):
+        """Test basic rolling correlation."""
+        # Perfect positive correlation between left and right
+        left_data = pd.DataFrame(
+            [[1.0, 2.0, 3.0],
+             [2.0, 3.0, 4.0],
+             [3.0, 4.0, 5.0],
+             [4.0, 5.0, 6.0],
+             [5.0, 6.0, 7.0]],
+            index=dates[:5],
+            columns=securities
+        )
+        right_data = pd.DataFrame(
+            [[2.0, 4.0, 6.0],
+             [4.0, 6.0, 8.0],
+             [6.0, 8.0, 10.0],
+             [8.0, 10.0, 12.0],
+             [10.0, 12.0, 14.0]],
+            index=dates[:5],
+            columns=securities
+        )
+
+        left_alpha = AlphaData(left_data, data_type=DataType.NUMERIC)
+        right_alpha = AlphaData(right_data, data_type=DataType.NUMERIC)
+
+        op = TsCorr(universe_mask, config_manager)
+        result = op(left_alpha, right_alpha, window=3)
+
+        # Perfect positive correlation should be 1.0
+        assert np.isclose(result._data.iloc[2, 0], 1.0)
+        assert np.isclose(result._data.iloc[4, 1], 1.0)
+
+    def test_corr_negative(self, dates, securities, universe_mask, config_manager):
+        """Test rolling correlation with negative relationship."""
+        left_data = pd.DataFrame(
+            [[1.0, 2.0, 3.0],
+             [2.0, 3.0, 4.0],
+             [3.0, 4.0, 5.0],
+             [4.0, 5.0, 6.0]],
+            index=dates[:4],
+            columns=securities
+        )
+        # Negative correlation (inverse relationship)
+        right_data = pd.DataFrame(
+            [[5.0, 6.0, 7.0],
+             [4.0, 5.0, 6.0],
+             [3.0, 4.0, 5.0],
+             [2.0, 3.0, 4.0]],
+            index=dates[:4],
+            columns=securities
+        )
+
+        left_alpha = AlphaData(left_data, data_type=DataType.NUMERIC)
+        right_alpha = AlphaData(right_data, data_type=DataType.NUMERIC)
+
+        op = TsCorr(universe_mask, config_manager)
+        result = op(left_alpha, right_alpha, window=3)
+
+        # Perfect negative correlation should be -1.0
+        assert np.isclose(result._data.iloc[2, 0], -1.0)
+
+    def test_corr_with_nans(self, dates, securities, universe_mask, config_manager):
+        """Test rolling correlation with NaN values."""
+        left_data = pd.DataFrame(
+            [[1.0, 2.0, 3.0],
+             [2.0, np.nan, 4.0],
+             [3.0, 4.0, np.nan],
+             [4.0, 5.0, 6.0]],
+            index=dates[:4],
+            columns=securities
+        )
+        right_data = pd.DataFrame(
+            [[2.0, 4.0, 6.0],
+             [4.0, 6.0, 8.0],
+             [6.0, np.nan, 10.0],
+             [8.0, 10.0, 12.0]],
+            index=dates[:4],
+            columns=securities
+        )
+
+        left_alpha = AlphaData(left_data, data_type=DataType.NUMERIC)
+        right_alpha = AlphaData(right_data, data_type=DataType.NUMERIC)
+
+        op = TsCorr(universe_mask, config_manager)
+        result = op(left_alpha, right_alpha, window=3)
+
+        # Should handle NaN properly
+        # Result may be NaN if not enough valid pairs
+        assert isinstance(result._data, pd.DataFrame)
+
+    def test_corr_invalid_window(self, dates, securities, universe_mask, config_manager):
+        """Test that invalid window raises error."""
+        data = pd.DataFrame(
+            [[1.0, 2.0, 3.0]],
+            index=dates[:1],
+            columns=securities
+        )
+        alpha_data = AlphaData(data, data_type=DataType.NUMERIC)
+
+        op = TsCorr(universe_mask, config_manager)
+
+        with pytest.raises(ValueError, match="window must be a positive integer"):
+            op(alpha_data, alpha_data, window=-3)
+
+    def test_corr_output_type(self, dates, securities, universe_mask, config_manager):
+        """Test that output has correct type."""
+        left_data = pd.DataFrame(
+            [[1.0, 2.0, 3.0],
+             [2.0, 3.0, 4.0],
+             [3.0, 4.0, 5.0]],
+            index=dates[:3],
+            columns=securities
+        )
+        right_data = pd.DataFrame(
+            [[2.0, 4.0, 6.0],
+             [4.0, 6.0, 8.0],
+             [6.0, 8.0, 10.0]],
+            index=dates[:3],
+            columns=securities
+        )
+
+        left_alpha = AlphaData(left_data, data_type=DataType.NUMERIC)
+        right_alpha = AlphaData(right_data, data_type=DataType.NUMERIC)
+
+        op = TsCorr(universe_mask, config_manager)
+        result = op(left_alpha, right_alpha, window=2)
+
+        assert isinstance(result, AlphaData)
+        assert result._data_type == DataType.NUMERIC
+        assert result._step_counter == 1
+
+
+class TestTsCovariance:
+    """Tests for TsCovariance operator (dual-input)."""
+
+    @pytest.fixture
+    def dates(self):
+        """Sample dates."""
+        return pd.date_range('2023-01-01', periods=10, freq='D')
+
+    @pytest.fixture
+    def securities(self):
+        """Sample security IDs."""
+        return ['AAPL', 'MSFT', 'GOOGL']
+
+    @pytest.fixture
+    def universe_mask(self, dates, securities):
+        """Universe mask."""
+        mask_data = pd.DataFrame(
+            [[True, True, True]] * 10,
+            index=dates,
+            columns=securities
+        )
+        return UniverseMask(mask_data)
+
+    @pytest.fixture
+    def config_manager(self, tmp_path):
+        """Config manager."""
+        return ConfigManager(str(tmp_path))
+
+    def test_cov_basic(self, dates, securities, universe_mask, config_manager):
+        """Test basic rolling covariance."""
+        left_data = pd.DataFrame(
+            [[1.0, 2.0, 3.0],
+             [2.0, 3.0, 4.0],
+             [3.0, 4.0, 5.0],
+             [4.0, 5.0, 6.0],
+             [5.0, 6.0, 7.0]],
+            index=dates[:5],
+            columns=securities
+        )
+        right_data = pd.DataFrame(
+            [[2.0, 4.0, 6.0],
+             [4.0, 6.0, 8.0],
+             [6.0, 8.0, 10.0],
+             [8.0, 10.0, 12.0],
+             [10.0, 12.0, 14.0]],
+            index=dates[:5],
+            columns=securities
+        )
+
+        left_alpha = AlphaData(left_data, data_type=DataType.NUMERIC)
+        right_alpha = AlphaData(right_data, data_type=DataType.NUMERIC)
+
+        op = TsCovariance(universe_mask, config_manager)
+        result = op(left_alpha, right_alpha, window=3)
+
+        # Covariance should be positive (variables move together)
+        assert result._data.iloc[2, 0] > 0
+        assert result._data.iloc[4, 1] > 0
+
+    def test_cov_negative(self, dates, securities, universe_mask, config_manager):
+        """Test rolling covariance with negative relationship."""
+        left_data = pd.DataFrame(
+            [[1.0, 2.0, 3.0],
+             [2.0, 3.0, 4.0],
+             [3.0, 4.0, 5.0],
+             [4.0, 5.0, 6.0]],
+            index=dates[:4],
+            columns=securities
+        )
+        # Negative relationship (inverse movement)
+        right_data = pd.DataFrame(
+            [[5.0, 6.0, 7.0],
+             [4.0, 5.0, 6.0],
+             [3.0, 4.0, 5.0],
+             [2.0, 3.0, 4.0]],
+            index=dates[:4],
+            columns=securities
+        )
+
+        left_alpha = AlphaData(left_data, data_type=DataType.NUMERIC)
+        right_alpha = AlphaData(right_data, data_type=DataType.NUMERIC)
+
+        op = TsCovariance(universe_mask, config_manager)
+        result = op(left_alpha, right_alpha, window=3)
+
+        # Covariance should be negative (variables move in opposite directions)
+        assert result._data.iloc[2, 0] < 0
+
+    def test_cov_with_nans(self, dates, securities, universe_mask, config_manager):
+        """Test rolling covariance with NaN values."""
+        left_data = pd.DataFrame(
+            [[1.0, 2.0, 3.0],
+             [2.0, np.nan, 4.0],
+             [3.0, 4.0, np.nan],
+             [4.0, 5.0, 6.0]],
+            index=dates[:4],
+            columns=securities
+        )
+        right_data = pd.DataFrame(
+            [[2.0, 4.0, 6.0],
+             [4.0, 6.0, 8.0],
+             [6.0, np.nan, 10.0],
+             [8.0, 10.0, 12.0]],
+            index=dates[:4],
+            columns=securities
+        )
+
+        left_alpha = AlphaData(left_data, data_type=DataType.NUMERIC)
+        right_alpha = AlphaData(right_data, data_type=DataType.NUMERIC)
+
+        op = TsCovariance(universe_mask, config_manager)
+        result = op(left_alpha, right_alpha, window=3)
+
+        # Should handle NaN properly
+        assert isinstance(result._data, pd.DataFrame)
+
+    def test_cov_invalid_window(self, dates, securities, universe_mask, config_manager):
+        """Test that invalid window raises error."""
+        data = pd.DataFrame(
+            [[1.0, 2.0, 3.0]],
+            index=dates[:1],
+            columns=securities
+        )
+        alpha_data = AlphaData(data, data_type=DataType.NUMERIC)
+
+        op = TsCovariance(universe_mask, config_manager)
+
+        with pytest.raises(ValueError, match="window must be a positive integer"):
+            op(alpha_data, alpha_data, window=0)
+
+    def test_cov_output_type(self, dates, securities, universe_mask, config_manager):
+        """Test that output has correct type."""
+        left_data = pd.DataFrame(
+            [[1.0, 2.0, 3.0],
+             [2.0, 3.0, 4.0],
+             [3.0, 4.0, 5.0]],
+            index=dates[:3],
+            columns=securities
+        )
+        right_data = pd.DataFrame(
+            [[2.0, 4.0, 6.0],
+             [4.0, 6.0, 8.0],
+             [6.0, 8.0, 10.0]],
+            index=dates[:3],
+            columns=securities
+        )
+
+        left_alpha = AlphaData(left_data, data_type=DataType.NUMERIC)
+        right_alpha = AlphaData(right_data, data_type=DataType.NUMERIC)
+
+        op = TsCovariance(universe_mask, config_manager)
+        result = op(left_alpha, right_alpha, window=2)
+
+        assert isinstance(result, AlphaData)
+        assert result._data_type == DataType.NUMERIC
         assert result._step_counter == 1

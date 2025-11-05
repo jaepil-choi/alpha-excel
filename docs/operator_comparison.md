@@ -5,31 +5,31 @@ This document compares operators implemented in legacy alpha-excel (v1.0) with t
 ## Summary Statistics
 
 - **Legacy v1.0 Total**: 44 operators
-- **Current v2.0 Total**: 25 operators (57% complete)
-- **Missing from v2.0**: 19 operators
+- **Current v2.0 Total**: 33 operators (75% complete)
+- **Missing from v2.0**: 11 operators
   - **Deferred for design discussion**: 4 operators (LabelQuantile, MapValues, CompositeGroup, Constant)
-  - **To be implemented**: 15 operators
+  - **To be implemented**: 7 operators
 
 ### Breakdown by Category
 
 | Category | v1.0 Count | v2.0 Count | Completion | Notes |
 |----------|------------|------------|------------|-------|
-| **Time-Series** | 15 | 7 | 47% | 8 missing: TsCorr, TsCovariance, TsRank, TsProduct, TsArgMax/Min, TsCountNans, TsAny/All |
+| **Time-Series** | 15 | 15 | **100%** ✅ | Complete! All time-series operators ported |
 | **Cross-Section** | 2 | 1 | 50% | 1 deferred: LabelQuantile (design discussion needed) |
 | **Group** | 7 | 1 | 14% | 6 missing: GroupNeutralize (**critical**), GroupScalePositive (**critical**), GroupSum, GroupMax/Min, GroupCount |
 | **Arithmetic** | 7 | 7 | **100%** ✅ | Complete! |
 | **Logical** | 10 | 9 | 90% | 1 missing: IsNan |
 | **Transformation** | 2 | 0 | 0% | 2 deferred: MapValues, CompositeGroup (design discussion needed) |
 | **Constants** | 1 | 0 | 0% | 1 deferred: Constant (design discussion needed) |
-| **TOTAL** | **44** | **25** | **57%** | **15 to implement, 4 deferred** |
+| **TOTAL** | **44** | **33** | **75%** | **7 to implement, 4 deferred** |
 
 ---
 
 ## Implementation Status by Category
 
-### ✅ Implemented in v2.0 (25 operators)
+### ✅ Implemented in v2.0 (33 operators)
 
-#### Time-Series Operators (7/15 = 47%)
+#### Time-Series Operators (15/15 = 100%)
 
 | Operator | Status | Location |
 |----------|--------|----------|
@@ -40,6 +40,14 @@ This document compares operators implemented in legacy alpha-excel (v1.0) with t
 | `TsSum` | ✅ | `ops/timeseries.py:224-275` |
 | `TsDelay` | ✅ | `ops/timeseries.py:277-322` |
 | `TsDelta` | ✅ | `ops/timeseries.py:324-369` |
+| `TsCountNans` | ✅ | `ops/timeseries.py:371-426` |
+| `TsAny` | ✅ | `ops/timeseries.py:429-487` |
+| `TsAll` | ✅ | `ops/timeseries.py:490-554` |
+| `TsProduct` | ✅ | `ops/timeseries.py` |
+| `TsArgMax` | ✅ | `ops/timeseries.py` |
+| `TsArgMin` | ✅ | `ops/timeseries.py` |
+| `TsCorr` | ✅ | `ops/timeseries.py` |
+| `TsCovariance` | ✅ | `ops/timeseries.py` |
 
 #### Cross-Section Operators (1/2 = 50%)
 
@@ -81,26 +89,11 @@ This document compares operators implemented in legacy alpha-excel (v1.0) with t
 
 ---
 
-## ❌ Missing from v2.0 (19 operators)
+## ❌ Missing from v2.0 (11 operators)
 
-### Time-Series Operators (8 missing)
+### Time-Series Operators (0 missing)
 
-| Operator | Description | Legacy Location | Priority |
-|----------|-------------|-----------------|----------|
-| `TsProduct` | Rolling product (compound returns) | `ops/timeseries.py:188-221` | Medium |
-| `TsArgMax` | Days ago when max occurred | `ops/timeseries.py:225-268` | Medium |
-| `TsArgMin` | Days ago when min occurred | `ops/timeseries.py:272-315` | Medium |
-| `TsCorr` | Rolling correlation | `ops/timeseries.py:319-373` | High |
-| `TsCovariance` | Rolling covariance | `ops/timeseries.py:377-431` | High |
-| `TsCountNans` | Count NaN values in window | `ops/timeseries.py:435-477` | Low |
-| `TsRank` | Time-series rolling rank | `ops/timeseries.py:481-546` | Medium |
-| `TsAny` | Rolling any (boolean) | `ops/timeseries.py:550-600` | Low |
-| `TsAll` | Rolling all (boolean) | `ops/timeseries.py:604-649` | Low |
-
-**Notes:**
-- All use pandas rolling window API (prefer_numpy=False)
-- All respect `min_periods_ratio` config from operators.yaml
-- TsCorr and TsCovariance are dual-input operators
+*All time-series operators are fully implemented! ✅*
 
 ---
 
@@ -206,11 +199,12 @@ These operators require fundamental design discussions before implementation:
 ### ✅ COMPLETED Categories
 
 - **Arithmetic Operators**: 100% complete (7/7) ✅
+- **Time-Series Operators**: 100% complete (15/15) ✅
 - **Logical/Comparison Operators**: 90% complete (9/10) ✅
 
 ### 🎯 Next Implementation Priorities
 
-Based on current status (57% overall completion), here are the recommended next steps:
+Based on current status (75% overall completion), here are the recommended next steps:
 
 #### Priority 1: Critical Group Operators (2 operators)
 **HIGHEST IMPACT** - Essential for quantitative research workflows
@@ -224,31 +218,7 @@ Based on current status (57% overall completion), here are the recommended next 
 
 ---
 
-#### Priority 2: Dual-Input Time-Series (2 operators)
-**HIGH IMPACT** - Commonly used for correlation and covariance
-
-| Operator | Use Case |
-|----------|----------|
-| `TsCorr` | Rolling correlation between two series |
-| `TsCovariance` | Rolling covariance for risk estimation |
-
-**Action**: Both use pandas rolling with dual inputs. Similar to TsMean implementation pattern.
-
----
-
-#### Priority 3: Remaining Time-Series (4 operators)
-**MEDIUM IMPACT** - Specialized operations
-
-| Operator | Priority | Use Case |
-|----------|----------|----------|
-| `TsRank` | Medium | Time-series percentile ranking |
-| `TsProduct` | Medium | Compound returns calculation |
-| `TsArgMax/TsArgMin` | Low | Timing of extremes |
-| `TsCountNans` | Low | Data quality monitoring |
-
----
-
-#### Priority 4: Group Utilities (4 operators)
+#### Priority 2: Group Utilities (4 operators)
 **MEDIUM IMPACT** - Peer-relative analysis
 
 | Operator | Use Case |
@@ -261,13 +231,12 @@ Based on current status (57% overall completion), here are the recommended next 
 
 ---
 
-#### Priority 5: Remaining Logical & Utilities (3 operators)
+#### Priority 3: Remaining Logical Operator (1 operator)
 **LOW IMPACT** - Nice-to-have completeness
 
 | Operator | Category | Use Case |
 |----------|----------|----------|
 | `IsNan` | Logical | NaN detection (can be done with .isna()) |
-| `TsAny/TsAll` | Time-series | Boolean aggregations |
 
 ---
 
