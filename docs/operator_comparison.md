@@ -4,46 +4,98 @@ This document compares operators implemented in legacy alpha-excel (v1.0) with t
 
 ## Summary Statistics
 
-- **Legacy v1.0 Total**: 40 operators
-- **Current v2.0 Total**: 3 operators + arithmetic magic methods
-- **Missing from v2.0**: 37 operators (93%)
+- **Legacy v1.0 Total**: 44 operators
+- **Current v2.0 Total**: 25 operators (57% complete)
+- **Missing from v2.0**: 19 operators
+  - **Deferred for design discussion**: 4 operators (LabelQuantile, MapValues, CompositeGroup, Constant)
+  - **To be implemented**: 15 operators
+
+### Breakdown by Category
+
+| Category | v1.0 Count | v2.0 Count | Completion | Notes |
+|----------|------------|------------|------------|-------|
+| **Time-Series** | 15 | 7 | 47% | 8 missing: TsCorr, TsCovariance, TsRank, TsProduct, TsArgMax/Min, TsCountNans, TsAny/All |
+| **Cross-Section** | 2 | 1 | 50% | 1 deferred: LabelQuantile (design discussion needed) |
+| **Group** | 7 | 1 | 14% | 6 missing: GroupNeutralize (**critical**), GroupScalePositive (**critical**), GroupSum, GroupMax/Min, GroupCount |
+| **Arithmetic** | 7 | 7 | **100%** ✅ | Complete! |
+| **Logical** | 10 | 9 | 90% | 1 missing: IsNan |
+| **Transformation** | 2 | 0 | 0% | 2 deferred: MapValues, CompositeGroup (design discussion needed) |
+| **Constants** | 1 | 0 | 0% | 1 deferred: Constant (design discussion needed) |
+| **TOTAL** | **44** | **25** | **57%** | **15 to implement, 4 deferred** |
 
 ---
 
 ## Implementation Status by Category
 
-### ✅ Implemented in v2.0 (3 + arithmetic)
+### ✅ Implemented in v2.0 (25 operators)
 
-| Operator | Category | Status | Notes |
-|----------|----------|--------|-------|
-| `TsMean` | Time-series | ✅ | Fully implemented with config support |
-| `Rank` | Cross-section | ✅ | Fully implemented |
-| `GroupRank` | Group | ✅ | Fully implemented |
-| Arithmetic | Operators | ✅ | Via AlphaData magic methods (`__add__`, `__sub__`, `__mul__`, `__truediv__`, `__pow__`) |
+#### Time-Series Operators (7/15 = 47%)
+
+| Operator | Status | Location |
+|----------|--------|----------|
+| `TsMean` | ✅ | `ops/timeseries.py:11-62` |
+| `TsStdDev` | ✅ | `ops/timeseries.py:65-116` |
+| `TsMax` | ✅ | `ops/timeseries.py:118-169` |
+| `TsMin` | ✅ | `ops/timeseries.py:171-222` |
+| `TsSum` | ✅ | `ops/timeseries.py:224-275` |
+| `TsDelay` | ✅ | `ops/timeseries.py:277-322` |
+| `TsDelta` | ✅ | `ops/timeseries.py:324-369` |
+
+#### Cross-Section Operators (1/2 = 50%)
+
+| Operator | Status | Location |
+|----------|--------|----------|
+| `Rank` | ✅ | `ops/crosssection.py:11-51` |
+
+#### Group Operators (1/7 = 14%)
+
+| Operator | Status | Location |
+|----------|--------|----------|
+| `GroupRank` | ✅ | `ops/group.py:12-79` |
+
+#### Arithmetic Operators (7/7 = 100%)
+
+| Operator | Status | Location |
+|----------|--------|----------|
+| `Add` | ✅ | `ops/arithmetic.py:13-36` |
+| `Subtract` | ✅ | `ops/arithmetic.py:39-63` |
+| `Multiply` | ✅ | `ops/arithmetic.py:65-89` |
+| `Divide` | ✅ | `ops/arithmetic.py:91-115` |
+| `Power` | ✅ | `ops/arithmetic.py:117-141` |
+| `Negate` | ✅ | `ops/arithmetic.py:143-166` |
+| `Abs` | ✅ | `ops/arithmetic.py:168-191` |
+
+#### Logical Operators (9/10 = 90%)
+
+| Operator | Status | Location |
+|----------|--------|----------|
+| `GreaterThan` | ✅ | `ops/logical.py:67-94` |
+| `LessThan` | ✅ | `ops/logical.py:96-122` |
+| `GreaterOrEqual` | ✅ | `ops/logical.py:124-150` |
+| `LessOrEqual` | ✅ | `ops/logical.py:152-178` |
+| `Equal` | ✅ | `ops/logical.py:180-206` |
+| `NotEqual` | ✅ | `ops/logical.py:208-234` |
+| `And` | ✅ | `ops/logical.py:241-300` |
+| `Or` | ✅ | `ops/logical.py:302-354` |
+| `Not` | ✅ | `ops/logical.py:356-405` |
 
 ---
 
-## ❌ Missing from v2.0 (37 operators)
+## ❌ Missing from v2.0 (19 operators)
 
-### Time-Series Operators (14 missing)
+### Time-Series Operators (8 missing)
 
 | Operator | Description | Legacy Location | Priority |
 |----------|-------------|-----------------|----------|
-| `TsMax` | Rolling maximum | `ops/timeseries.py:38-61` | High |
-| `TsMin` | Rolling minimum | `ops/timeseries.py:64-88` | High |
-| `TsSum` | Rolling sum | `ops/timeseries.py:91-115` | High |
-| `TsStdDev` | Rolling standard deviation | `ops/timeseries.py:118-142` | High |
-| `TsDelay` | Time-series delay/shift | `ops/timeseries.py:145-163` | High |
-| `TsDelta` | Difference from N periods ago | `ops/timeseries.py:166-184` | High |
-| `TsProduct` | Rolling product (compound returns) | `ops/timeseries.py:187-221` | Medium |
-| `TsArgMax` | Days ago when max occurred | `ops/timeseries.py:224-268` | Medium |
-| `TsArgMin` | Days ago when min occurred | `ops/timeseries.py:271-315` | Medium |
-| `TsCorr` | Rolling correlation | `ops/timeseries.py:318-373` | High |
-| `TsCovariance` | Rolling covariance | `ops/timeseries.py:376-431` | High |
-| `TsCountNans` | Count NaN values in window | `ops/timeseries.py:434-477` | Low |
-| `TsRank` | Time-series rolling rank | `ops/timeseries.py:480-546` | Medium |
-| `TsAny` | Rolling any (boolean) | `ops/timeseries.py:549-600` | Low |
-| `TsAll` | Rolling all (boolean) | `ops/timeseries.py:603-649` | Low |
+| `TsProduct` | Rolling product (compound returns) | `ops/timeseries.py:188-221` | Medium |
+| `TsArgMax` | Days ago when max occurred | `ops/timeseries.py:225-268` | Medium |
+| `TsArgMin` | Days ago when min occurred | `ops/timeseries.py:272-315` | Medium |
+| `TsCorr` | Rolling correlation | `ops/timeseries.py:319-373` | High |
+| `TsCovariance` | Rolling covariance | `ops/timeseries.py:377-431` | High |
+| `TsCountNans` | Count NaN values in window | `ops/timeseries.py:435-477` | Low |
+| `TsRank` | Time-series rolling rank | `ops/timeseries.py:481-546` | Medium |
+| `TsAny` | Rolling any (boolean) | `ops/timeseries.py:550-600` | Low |
+| `TsAll` | Rolling all (boolean) | `ops/timeseries.py:604-649` | Low |
 
 **Notes:**
 - All use pandas rolling window API (prefer_numpy=False)
@@ -52,16 +104,9 @@ This document compares operators implemented in legacy alpha-excel (v1.0) with t
 
 ---
 
-### Cross-Section Operators (1 missing)
+### Cross-Section Operators (0 missing, 1 deferred)
 
-| Operator | Description | Legacy Location | Priority |
-|----------|-------------|-----------------|----------|
-| `LabelQuantile` | Quantile binning with labels | `ops/crosssection.py:51-183` | High |
-
-**Notes:**
-- Essential for Fama-French portfolio construction
-- Handles edge cases (all identical values, partial ties)
-- Uses `pd.qcut` with `duplicates='drop'`
+*No operators to implement immediately. See "Deferred for Design Discussion" below.*
 
 ---
 
@@ -84,141 +129,157 @@ This document compares operators implemented in legacy alpha-excel (v1.0) with t
 
 ---
 
-### Arithmetic Operators (2 missing)
+### Arithmetic Operators (0 missing)
+
+*All arithmetic operators are fully implemented! ✅*
+
+---
+
+### Logical Operators (1 missing)
 
 | Operator | Description | Legacy Location | Priority |
 |----------|-------------|-----------------|----------|
-| `Negate` | Unary negation (-A) | `ops/arithmetic.py:82-90` | Low |
-| `Abs` | Absolute value | `ops/arithmetic.py:135-144` | Medium |
+| `IsNan` | Check for NaN values | `ops/logical.py:136-173` | High |
 
 **Notes:**
-- Add/Subtract/Multiply/Divide/Pow already implemented via AlphaData magic methods
-- Negate can be implemented via `__neg__` magic method
-- Abs can be implemented via `__abs__` magic method
+- All comparison operators implemented: ==, !=, >, <, >=, <= ✅
+- All logical operators implemented: &, \|, ~ ✅
+- All return boolean DataFrames with NaN→False semantics
 
 ---
 
-### Logical Operators (10 missing)
+### Transformation Operators (0 missing, 2 deferred)
 
-| Operator | Description | Legacy Location | Priority |
-|----------|-------------|-----------------|----------|
-| `Equals` | Equality comparison (==) | `ops/logical.py:8-28` | High |
-| `NotEquals` | Not-equal comparison (!=) | `ops/logical.py:31-41` | High |
-| `GreaterThan` | Greater-than comparison (>) | `ops/logical.py:44-54` | High |
-| `LessThan` | Less-than comparison (<) | `ops/logical.py:57-67` | High |
-| `GreaterOrEqual` | Greater-or-equal comparison (>=) | `ops/logical.py:70-79` | High |
-| `LessOrEqual` | Less-or-equal comparison (<=) | `ops/logical.py:82-92` | High |
-| `And` | Logical AND (&) | `ops/logical.py:95-106` | High |
-| `Or` | Logical OR (\|) | `ops/logical.py:109-119` | High |
-| `Not` | Logical NOT (~) | `ops/logical.py:122-132` | High |
-| `IsNan` | Check for NaN values | `ops/logical.py:135-173` | High |
-
-**Notes:**
-- Comparison operators can be implemented via AlphaData magic methods (`__eq__`, `__ne__`, `__gt__`, `__lt__`, `__ge__`, `__le__`)
-- Logical operators need separate implementation or magic methods (`__and__`, `__or__`, `__invert__`)
-- All return boolean DataFrames
+*No operators to implement immediately. See "Deferred for Design Discussion" below.*
 
 ---
 
-### Transformation Operators (2 missing)
+### Constants (0 missing, 1 deferred)
 
-| Operator | Description | Legacy Location | Priority |
-|----------|-------------|-----------------|----------|
-| `MapValues` | Element-wise value mapping/replacement | `ops/transformation.py:9-138` | **Critical** |
-| `CompositeGroup` | Combine two group labels | `ops/transformation.py:141-275` | **Critical** |
-
-**Notes:**
-- **MapValues** is CRITICAL for converting categorical labels to numeric signals
-- **CompositeGroup** is CRITICAL for Fama-French 2×3 sorts
-- Both are essential for multi-factor portfolio construction
-- Use pandas `.replace()` and string concatenation
+*No operators to implement immediately. See "Deferred for Design Discussion" below.*
 
 ---
 
-### Constants (1 missing)
+## 🔄 Deferred for Design Discussion (4 operators)
 
-| Operator | Description | Legacy Location | Priority |
-|----------|-------------|-----------------|----------|
-| `Constant` | Create constant-value DataFrame | `ops/constants.py:7-24` | Medium |
+These operators require fundamental design discussions before implementation:
 
-**Notes:**
-- Useful for equal-weighting (`Constant(1)`)
-- Creates (T, N) DataFrame filled with constant value
+### Cross-Section: LabelQuantile
 
----
+| Operator | Description | Legacy Location | Reason for Deferral |
+|----------|-------------|-----------------|---------------------|
+| `LabelQuantile` | Quantile binning with labels | `ops/crosssection.py:52-183` | Needs discussion on output type design (returns categorical labels, not numeric) |
 
-## Implementation Priority Recommendations
+**Design Questions:**
+- Should this return GROUP type or a new LABEL type?
+- How should it integrate with the type system?
+- Essential for Fama-French portfolio construction
 
-### Phase 1: Critical Infrastructure (5 operators)
-These are essential for basic quantitative research workflows:
+### Transformation Operators
 
-1. **GroupNeutralize** - Sector-neutral signals
-2. **GroupScalePositive** - Value-weighting portfolios
-3. **MapValues** - Convert labels to signals
-4. **CompositeGroup** - Multi-dimensional sorts
-5. **LabelQuantile** - Quantile binning
+| Operator | Description | Legacy Location | Reason for Deferral |
+|----------|-------------|-----------------|---------------------|
+| `MapValues` | Element-wise value mapping/replacement | `ops/transformation.py:10-138` | Needs discussion on mapping specification design (dict-based mapping API) |
+| `CompositeGroup` | Combine two group labels | `ops/transformation.py:142-275` | Needs discussion on string concatenation vs structured composite labels |
 
-**Impact**: Enables Fama-French factor construction and sector-neutral strategies
+**Design Questions:**
+- How to specify mappings in a config-driven way?
+- Should MapValues accept Python dicts or YAML configs?
+- Should CompositeGroup produce string concatenation or structured tuples?
+- Both are CRITICAL for multi-factor portfolio construction
 
----
+### Constants
 
-### Phase 2: Core Time-Series (8 operators)
-These are commonly used for signal generation:
+| Operator | Description | Legacy Location | Reason for Deferral |
+|----------|-------------|-----------------|---------------------|
+| `Constant` | Create constant-value DataFrame | `ops/constants.py:8-24` | Needs discussion on initialization API (requires universe shape knowledge) |
 
-1. **TsStdDev** - Volatility estimation
-2. **TsMax** / **TsMin** - Extremes tracking
-3. **TsSum** - Accumulation
-4. **TsDelay** - Lagged values
-5. **TsDelta** - Momentum
-6. **TsCorr** - Rolling correlation
-7. **TsCovariance** - Rolling covariance
-8. **TsRank** - Time-series percentile
-
-**Impact**: Enables most momentum, volatility, and trend-following strategies
+**Design Questions:**
+- How does Constant access universe shape (T, N)?
+- Should it be a special Field or an Operator?
+- Useful for equal-weighting strategies
 
 ---
 
-### Phase 3: Logical Operators (10 operators)
-Essential for conditional logic and filtering:
+## Implementation Priority Recommendations (Updated)
 
-1. All comparison operators (6: ==, !=, >, <, >=, <=)
-2. All logical operators (4: &, |, ~, IsNan)
+### ✅ COMPLETED Categories
 
-**Impact**: Enables conditional signal construction and data quality checks
+- **Arithmetic Operators**: 100% complete (7/7) ✅
+- **Logical/Comparison Operators**: 90% complete (9/10) ✅
 
----
+### 🎯 Next Implementation Priorities
 
-### Phase 4: Group Utilities (4 operators)
-Additional group operations:
+Based on current status (57% overall completion), here are the recommended next steps:
 
-1. **GroupSum** - Peer calculations
-2. **GroupMax** / **GroupMin** - Group extremes
-3. **GroupCount** - Group size
+#### Priority 1: Critical Group Operators (2 operators)
+**HIGHEST IMPACT** - Essential for quantitative research workflows
 
-**Impact**: Advanced peer-relative analysis
+| Operator | Impact | Performance Note |
+|----------|--------|------------------|
+| `GroupNeutralize` | **CRITICAL** for sector-neutral signals | Can be optimized with NumPy scatter-gather later |
+| `GroupScalePositive` | **CRITICAL** for value-weighting portfolios | Can be optimized with NumPy scatter-gather later |
 
----
-
-### Phase 5: Advanced Time-Series (4 operators)
-Specialized time-series operations:
-
-1. **TsProduct** - Compound returns
-2. **TsArgMax** / **TsArgMin** - Extremes timing
-3. **TsCountNans** - Data quality
-
-**Impact**: Advanced return calculations and data monitoring
+**Action**: Implement these first with pandas groupby (row-by-row). Optimize with NumPy later if needed.
 
 ---
 
-### Phase 6: Utilities (6 operators)
-Nice-to-have utilities:
+#### Priority 2: Dual-Input Time-Series (2 operators)
+**HIGH IMPACT** - Commonly used for correlation and covariance
 
-1. **TsAny** / **TsAll** - Boolean aggregations
-2. **Abs** - Absolute value
-3. **Negate** - Unary negation
-4. **Constant** - Constant values
+| Operator | Use Case |
+|----------|----------|
+| `TsCorr` | Rolling correlation between two series |
+| `TsCovariance` | Rolling covariance for risk estimation |
 
-**Impact**: Convenience and code clarity
+**Action**: Both use pandas rolling with dual inputs. Similar to TsMean implementation pattern.
+
+---
+
+#### Priority 3: Remaining Time-Series (4 operators)
+**MEDIUM IMPACT** - Specialized operations
+
+| Operator | Priority | Use Case |
+|----------|----------|----------|
+| `TsRank` | Medium | Time-series percentile ranking |
+| `TsProduct` | Medium | Compound returns calculation |
+| `TsArgMax/TsArgMin` | Low | Timing of extremes |
+| `TsCountNans` | Low | Data quality monitoring |
+
+---
+
+#### Priority 4: Group Utilities (4 operators)
+**MEDIUM IMPACT** - Peer-relative analysis
+
+| Operator | Use Case |
+|----------|----------|
+| `GroupSum` | Sum within groups |
+| `GroupMax/GroupMin` | Extremes within groups |
+| `GroupCount` | Group size information |
+
+**Action**: All use pandas groupby (row-by-row), similar to GroupRank.
+
+---
+
+#### Priority 5: Remaining Logical & Utilities (3 operators)
+**LOW IMPACT** - Nice-to-have completeness
+
+| Operator | Category | Use Case |
+|----------|----------|----------|
+| `IsNan` | Logical | NaN detection (can be done with .isna()) |
+| `TsAny/TsAll` | Time-series | Boolean aggregations |
+
+---
+
+### 🔄 Deferred (Requires Design Discussion)
+
+These 4 operators require design decisions before implementation:
+1. `LabelQuantile` - Output type design
+2. `MapValues` - Mapping API design
+3. `CompositeGroup` - Label composition strategy
+4. `Constant` - Universe shape access pattern
+
+See "Deferred for Design Discussion" section above for details.
 
 ---
 
