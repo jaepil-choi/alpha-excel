@@ -245,3 +245,7 @@ pip-selfcheck.json
 .specstory/
 
 data/
+
+sandbox/
+sandbox.py
+sandbox.ipynb
