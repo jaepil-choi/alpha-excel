@@ -34,7 +34,7 @@ class GroupRank(BaseOperator):
     prefer_numpy = False  # Use pandas groupby (will optimize with NumPy in future)
 
     def compute(self, data: pd.DataFrame, group_labels: pd.DataFrame, **params) -> pd.DataFrame:
-        """Rank within groups using pandas groupby.
+        """Rank within groups using pandas groupby (vectorized).
 
         Args:
             data: Input DataFrame (T, N) - numeric values to rank
@@ -45,37 +45,23 @@ class GroupRank(BaseOperator):
             DataFrame with within-group percentile ranks
 
         Note:
-            Processes row-by-row (time period by time period) because group
-            membership can change over time. Future optimization: NumPy
-            scatter-gather algorithm (see docs/research/faster-group-operations.md).
+            Uses vectorized pandas stack/groupby/rank/unstack for performance.
+            Processes all time periods at once. Groups by (date, group_label) tuple.
+            See docs/research/faster-group-operations.md for details.
         """
-        result = data.copy()
+        # Stack: Convert 2D → 1D with MultiIndex (date, security)
+        A_stacked = data.stack()
+        B_stacked = group_labels.stack()
 
-        # Process each time period (row) independently
-        for idx in result.index:
-            row_data = data.loc[idx]
-            row_groups = group_labels.loc[idx]
+        # Groupby (date, group_label) and rank within each group
+        # level 0 = date index, ensures independent ranking per time period
+        result_stacked = A_stacked.groupby(
+            [A_stacked.index.get_level_values(0), B_stacked],
+            observed=True
+        ).rank(method='average', pct=True)
 
-            # Create temporary dataframe for groupby
-            temp_df = pd.DataFrame({
-                'value': row_data,
-                'group': row_groups
-            })
-
-            # Group by labels and rank within each group
-            # transform applies rank to each group independently
-            ranked = temp_df.groupby('group', observed=True)['value'].transform(
-                lambda x: x.rank(method='average', pct=True)
-            )
-
-            # Assign ranked values back
-            # Handle empty results (all NaN case)
-            if ranked.empty or len(ranked) == 0:
-                result.loc[idx, :] = np.nan
-            else:
-                result.loc[idx, :] = ranked.values
-
-        return result
+        # Unstack: Convert 1D back to 2D DataFrame
+        return result_stacked.unstack()
 
 
 class GroupMax(BaseOperator):
@@ -103,7 +89,7 @@ class GroupMax(BaseOperator):
     prefer_numpy = False  # Use pandas groupby (will optimize with NumPy in future)
 
     def compute(self, data: pd.DataFrame, group_labels: pd.DataFrame, **params) -> pd.DataFrame:
-        """Broadcast maximum to all group members.
+        """Broadcast maximum to all group members (vectorized).
 
         Args:
             data: Input DataFrame (T, N) - numeric values
@@ -114,33 +100,25 @@ class GroupMax(BaseOperator):
             DataFrame with group max broadcast to all members
 
         Note:
-            Processes row-by-row (time period by time period) because group
-            membership can change over time. Future optimization: NumPy
-            scatter-gather algorithm (see docs/research/faster-group-operations.md).
+            Uses vectorized pandas stack/groupby/transform/unstack for performance.
+            Processes all time periods at once. Groups by (date, group_label) tuple.
+            See docs/research/faster-group-operations.md for details.
         """
-        result = data.copy()
+        # Stack: Convert 2D → 1D with MultiIndex (date, security)
+        A_stacked = data.stack()
+        B_stacked = group_labels.stack()
 
-        # Process each time period (row) independently
-        for idx in result.index:
-            row_data = data.loc[idx]
-            row_groups = group_labels.loc[idx]
+        # Groupby (date, group_label) and broadcast max to all members
+        result_stacked = A_stacked.groupby(
+            [A_stacked.index.get_level_values(0), B_stacked],
+            observed=True
+        ).transform('max')
 
-            # Create temporary dataframe for groupby
-            temp_df = pd.DataFrame({
-                'value': row_data,
-                'group': row_groups
-            })
-
-            # Group by labels and broadcast max
-            grouped = temp_df.groupby('group', observed=True)['value']
-            broadcasted = grouped.transform(lambda x: x.max())
-
-            result.loc[idx] = broadcasted.values
+        # Unstack: Convert 1D back to 2D DataFrame
+        result = result_stacked.unstack()
 
         # Preserve NaN in original positions
-        result = result.where(~data.isnull())
-
-        return result
+        return result.where(~data.isnull())
 
 
 class GroupMin(BaseOperator):
@@ -168,7 +146,7 @@ class GroupMin(BaseOperator):
     prefer_numpy = False  # Use pandas groupby (will optimize with NumPy in future)
 
     def compute(self, data: pd.DataFrame, group_labels: pd.DataFrame, **params) -> pd.DataFrame:
-        """Broadcast minimum to all group members.
+        """Broadcast minimum to all group members (vectorized).
 
         Args:
             data: Input DataFrame (T, N) - numeric values
@@ -179,33 +157,25 @@ class GroupMin(BaseOperator):
             DataFrame with group min broadcast to all members
 
         Note:
-            Processes row-by-row (time period by time period) because group
-            membership can change over time. Future optimization: NumPy
-            scatter-gather algorithm (see docs/research/faster-group-operations.md).
+            Uses vectorized pandas stack/groupby/transform/unstack for performance.
+            Processes all time periods at once. Groups by (date, group_label) tuple.
+            See docs/research/faster-group-operations.md for details.
         """
-        result = data.copy()
+        # Stack: Convert 2D → 1D with MultiIndex (date, security)
+        A_stacked = data.stack()
+        B_stacked = group_labels.stack()
 
-        # Process each time period (row) independently
-        for idx in result.index:
-            row_data = data.loc[idx]
-            row_groups = group_labels.loc[idx]
+        # Groupby (date, group_label) and broadcast min to all members
+        result_stacked = A_stacked.groupby(
+            [A_stacked.index.get_level_values(0), B_stacked],
+            observed=True
+        ).transform('min')
 
-            # Create temporary dataframe for groupby
-            temp_df = pd.DataFrame({
-                'value': row_data,
-                'group': row_groups
-            })
-
-            # Group by labels and broadcast min
-            grouped = temp_df.groupby('group', observed=True)['value']
-            broadcasted = grouped.transform(lambda x: x.min())
-
-            result.loc[idx] = broadcasted.values
+        # Unstack: Convert 1D back to 2D DataFrame
+        result = result_stacked.unstack()
 
         # Preserve NaN in original positions
-        result = result.where(~data.isnull())
-
-        return result
+        return result.where(~data.isnull())
 
 
 class GroupSum(BaseOperator):
@@ -234,7 +204,7 @@ class GroupSum(BaseOperator):
     prefer_numpy = False  # Use pandas groupby (will optimize with NumPy in future)
 
     def compute(self, data: pd.DataFrame, group_labels: pd.DataFrame, **params) -> pd.DataFrame:
-        """Broadcast sum to all group members.
+        """Broadcast sum to all group members (vectorized).
 
         Args:
             data: Input DataFrame (T, N) - numeric values
@@ -245,33 +215,25 @@ class GroupSum(BaseOperator):
             DataFrame with group sum broadcast to all members
 
         Note:
-            Processes row-by-row (time period by time period) because group
-            membership can change over time. Future optimization: NumPy
-            scatter-gather algorithm (see docs/research/faster-group-operations.md).
+            Uses vectorized pandas stack/groupby/transform/unstack for performance.
+            Processes all time periods at once. Groups by (date, group_label) tuple.
+            See docs/research/faster-group-operations.md for details.
         """
-        result = data.copy()
+        # Stack: Convert 2D → 1D with MultiIndex (date, security)
+        A_stacked = data.stack()
+        B_stacked = group_labels.stack()
 
-        # Process each time period (row) independently
-        for idx in result.index:
-            row_data = data.loc[idx]
-            row_groups = group_labels.loc[idx]
+        # Groupby (date, group_label) and broadcast sum to all members
+        result_stacked = A_stacked.groupby(
+            [A_stacked.index.get_level_values(0), B_stacked],
+            observed=True
+        ).transform('sum')
 
-            # Create temporary dataframe for groupby
-            temp_df = pd.DataFrame({
-                'value': row_data,
-                'group': row_groups
-            })
-
-            # Group by labels and broadcast sum
-            grouped = temp_df.groupby('group', observed=True)['value']
-            broadcasted = grouped.transform(lambda x: x.sum())
-
-            result.loc[idx] = broadcasted.values
+        # Unstack: Convert 1D back to 2D DataFrame
+        result = result_stacked.unstack()
 
         # Preserve NaN in original positions
-        result = result.where(~data.isnull())
-
-        return result
+        return result.where(~data.isnull())
 
 
 class GroupCount(BaseOperator):
@@ -303,7 +265,7 @@ class GroupCount(BaseOperator):
     prefer_numpy = False  # Use pandas groupby (will optimize with NumPy in future)
 
     def compute(self, group_labels: pd.DataFrame, **params) -> pd.DataFrame:
-        """Broadcast count to all group members.
+        """Broadcast count to all group members (vectorized).
 
         Args:
             group_labels: Group label DataFrame (T, N) - category dtype expected
@@ -313,36 +275,26 @@ class GroupCount(BaseOperator):
             DataFrame with group member count broadcast to all members
 
         Note:
-            Processes row-by-row (time period by time period) because group
-            membership can change over time. Future optimization: NumPy
-            scatter-gather algorithm (see docs/research/faster-group-operations.md).
+            Uses vectorized pandas stack/groupby/transform/unstack for performance.
+            Processes all time periods at once. Groups by (date, group_label) tuple.
+            See docs/research/faster-group-operations.md for details.
         """
-        result = pd.DataFrame(
-            index=group_labels.index,
-            columns=group_labels.columns,
-            dtype=float
+        # Stack: Convert 2D → 1D with MultiIndex (date, security)
+        B_stacked = group_labels.stack()
+
+        # Groupby (date, group_label) and broadcast count to all members
+        # transform('size') returns count of members in each group
+        grouped = B_stacked.groupby(
+            [B_stacked.index.get_level_values(0), B_stacked],
+            observed=True
         )
+        counts = grouped.transform('size')
 
-        # Process each time period (row) independently
-        for idx in result.index:
-            row_groups = group_labels.loc[idx]
-
-            # Create temporary dataframe for groupby
-            temp_df = pd.DataFrame({
-                'group': row_groups
-            })
-
-            # Group by labels and broadcast count
-            # transform('size') returns count of members (including NaN in value, but not NaN in group)
-            grouped = temp_df.groupby('group', observed=True)
-            counts = grouped.transform('size')
-
-            result.loc[idx] = counts.values.flatten()
+        # Unstack: Convert 1D back to 2D DataFrame
+        result = counts.unstack()
 
         # Where group label is NaN, set count to NaN (not 0)
-        result = result.where(~group_labels.isnull())
-
-        return result
+        return result.where(~group_labels.isnull())
 
 
 class GroupNeutralize(BaseOperator):
@@ -373,7 +325,7 @@ class GroupNeutralize(BaseOperator):
     prefer_numpy = False  # Use pandas groupby (will optimize with NumPy in future)
 
     def compute(self, data: pd.DataFrame, group_labels: pd.DataFrame, **params) -> pd.DataFrame:
-        """Subtract group mean from each value.
+        """Subtract group mean from each value (vectorized).
 
         Args:
             data: Input DataFrame (T, N) - numeric values
@@ -384,42 +336,35 @@ class GroupNeutralize(BaseOperator):
             DataFrame with group means subtracted (sector-neutral)
 
         Note:
-            Processes row-by-row (time period by time period) because group
-            membership can change over time. Uses stricter NaN handling than
-            other group operators - filters out positions where either value
-            OR group is NaN before computing mean. Future optimization: NumPy
-            scatter-gather algorithm (see docs/research/faster-group-operations.md).
+            Uses vectorized pandas stack/groupby/transform/unstack for performance.
+            Processes all time periods at once. Uses stricter NaN handling - filters
+            out positions where either value OR group is NaN before computing mean.
+            See docs/research/faster-group-operations.md for details.
         """
-        result = data.copy()
+        # Stack: Convert 2D → 1D with MultiIndex (date, security)
+        A_stacked = data.stack()
+        B_stacked = group_labels.stack()
 
-        # Process each time period (row) independently
-        for idx in result.index:
-            row_data = data.loc[idx]
-            row_groups = group_labels.loc[idx]
+        # Create DataFrame for filtering
+        temp_df = pd.DataFrame({'value': A_stacked, 'group': B_stacked})
 
-            # Create temporary DataFrame for grouping
-            temp_df = pd.DataFrame({
-                'value': row_data,
-                'group': row_groups
-            })
+        # Filter out rows where value OR group is NaN (stricter than other operators)
+        valid_mask = temp_df['value'].notna() & temp_df['group'].notna()
+        valid_df = temp_df[valid_mask]
 
-            # Filter out rows where value OR group is NaN (stricter than other operators)
-            # These will remain NaN in result
-            valid_mask = temp_df['value'].notna() & temp_df['group'].notna()
-            valid_df = temp_df[valid_mask]
+        if len(valid_df) > 0:
+            # Groupby (date, group_label) and subtract mean within each group
+            neutralized_values = valid_df.groupby(
+                [valid_df.index.get_level_values(0), valid_df['group']],
+                observed=True
+            )['value'].transform(lambda x: x - x.mean())
 
-            if len(valid_df) > 0:
-                # Group by labels and subtract mean
-                grouped = valid_df.groupby('group', observed=True)['value']
-                neutralized_values = grouped.transform(lambda x: x - x.mean())
+            # Reconstruct full Series with NaN preserved
+            result_series = pd.Series(index=temp_df.index, dtype=float)
+            result_series[valid_mask] = neutralized_values.values
 
-                # Reconstruct full result with NaN preserved
-                neutralized_series = pd.Series(index=temp_df.index, dtype=float)
-                neutralized_series[valid_mask] = neutralized_values.values
-            else:
-                # All NaN - result is all NaN
-                neutralized_series = pd.Series(index=temp_df.index, dtype=float)
-
-            result.loc[idx] = neutralized_series.values
-
-        return result
+            # Unstack: Convert 1D back to 2D DataFrame
+            return result_series.unstack()
+        else:
+            # All NaN - result is all NaN
+            return pd.DataFrame(np.nan, index=data.index, columns=data.columns)

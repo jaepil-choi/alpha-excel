@@ -54,7 +54,7 @@ class TestGroupRank:
     @pytest.fixture
     def universe_mask(self, dates, securities):
         """Create universe mask."""
-        mask = pd.DataFrame(True, index=dates, columns=securities)
+        mask = pd.DataFrame(True, index=dates[:5], columns=securities)
         # Exclude GOOGL on 2024-01-03
         mask.loc['2024-01-03', 'GOOGL'] = False
         return UniverseMask(mask)
@@ -259,11 +259,17 @@ class TestGroupRank:
         op = GroupRank(universe_mask, config_manager)
         result = op(numeric_data, group_labels)
 
-        # Verify step history
-        assert len(result._step_history) == 1
-        assert result._step_history[0]['step'] == 1
-        assert 'GroupRank' in result._step_history[0]['expr']
-        assert result._step_history[0]['op'] == 'GroupRank'
+        # Verify step history (merged from both inputs + current op)
+        assert len(result._step_history) == 3
+        # Check input histories are preserved
+        assert result._step_history[0]['step'] == 0
+        assert 'Field(returns)' == result._step_history[0]['expr']
+        assert result._step_history[1]['step'] == 0
+        assert 'Field(sector)' == result._step_history[1]['expr']
+        # Check current operation is appended
+        assert result._step_history[2]['step'] == 1
+        assert 'GroupRank' in result._step_history[2]['expr']
+        assert result._step_history[2]['op'] == 'GroupRank'
 
     def test_group_rank_single_group(self, dates, securities, universe_mask, config_manager):
         """Test ranking when all assets in same group."""
@@ -343,7 +349,7 @@ class TestGroupMax:
     @pytest.fixture
     def universe_mask(self, dates, securities):
         """Create universe mask."""
-        mask = pd.DataFrame(True, index=dates, columns=securities)
+        mask = pd.DataFrame(True, index=dates[:5], columns=securities)
         mask.loc['2024-01-03', 'GOOGL'] = False
         return UniverseMask(mask)
 
@@ -564,7 +570,7 @@ class TestGroupMin:
     @pytest.fixture
     def universe_mask(self, dates, securities):
         """Create universe mask."""
-        mask = pd.DataFrame(True, index=dates, columns=securities)
+        mask = pd.DataFrame(True, index=dates[:5], columns=securities)
         return UniverseMask(mask)
 
     @pytest.fixture
@@ -720,7 +726,7 @@ class TestGroupSum:
     @pytest.fixture
     def universe_mask(self, dates, securities):
         """Create universe mask."""
-        mask = pd.DataFrame(True, index=dates, columns=securities)
+        mask = pd.DataFrame(True, index=dates[:5], columns=securities)
         return UniverseMask(mask)
 
     @pytest.fixture
@@ -876,7 +882,7 @@ class TestGroupCount:
     @pytest.fixture
     def universe_mask(self, dates, securities):
         """Create universe mask."""
-        mask = pd.DataFrame(True, index=dates, columns=securities)
+        mask = pd.DataFrame(True, index=dates[:5], columns=securities)
         return UniverseMask(mask)
 
     @pytest.fixture
@@ -1007,7 +1013,7 @@ class TestGroupNeutralize:
     @pytest.fixture
     def universe_mask(self, dates, securities):
         """Create universe mask."""
-        mask = pd.DataFrame(True, index=dates, columns=securities)
+        mask = pd.DataFrame(True, index=dates[:5], columns=securities)
         return UniverseMask(mask)
 
     @pytest.fixture
