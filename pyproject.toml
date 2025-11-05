@@ -1,7 +1,7 @@
 [project]
-name = "alpha-canvas"
-version = "0.1.0"
-description = ""
+name = "alpha-excel"
+version = "0.2.0"
+description = "Pandas-based quantitative finance research framework for building and backtesting factor-based trading strategies"
 authors = [
     {name = "jaepil-choi.laptop",email = "chljeffreyz@gmail.com"}
 ]
@@ -26,6 +26,7 @@ dependencies = [
 [tool.poetry]
 packages = [
     {include = "alpha_excel", from = "src"},
+    {include = "alpha_excel2", from = "src"},
     {include = "alpha_database", from = "src"},
     {include = "alpha_lab", from = "src"},
 ]
