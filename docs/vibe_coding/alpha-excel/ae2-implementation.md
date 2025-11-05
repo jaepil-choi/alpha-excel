@@ -18,8 +18,8 @@ This document tracks the phased implementation of alpha-excel v2.0. For architec
 | Phase 3.3 |  COMPLETE | 26 | OperatorRegistry |
 | Phase 3.4 |  COMPLETE | 29 | AlphaExcel Facade (Core) |
 | Phase 3.5 | = NEXT | ~35 | Backtesting Methods |
-| Phase 3.6 | =Ë PLANNED | ~20 | Integration & Validation |
-| Phase 4 | =Ë PLANNED | TBD | Testing & Migration |
+| Phase 3.6 | =ï¿½ PLANNED | ~20 | Integration & Validation |
+| Phase 4 | =ï¿½ PLANNED | TBD | Testing & Migration |
 
 **Total Tests Passing**: 260 tests
 
@@ -96,14 +96,14 @@ This document tracks the phased implementation of alpha-excel v2.0. For architec
 
 - BaseOperator receives: `universe_mask`, `config_manager`, `registry` (not entire facade)
 - FieldLoader receives: `data_source`, `universe_mask`, `config_manager`
-- Components don't depend on AlphaExcel facade ’ can be built independently
+- Components don't depend on AlphaExcel facade ï¿½ can be built independently
 
 ### Components Implemented
 
 1. **preprocessing.yaml** (NEW config file)
    - Type-based preprocessing rules
    - `numeric`: `forward_fill: false`
-   - `group`: `forward_fill: true` (monthly ’ daily expansion)
+   - `group`: `forward_fill: true` (monthly ï¿½ daily expansion)
    - `weight`, `mask`: `forward_fill: false`
 
 2. **BaseOperator** (`ops/base.py`)
@@ -140,7 +140,7 @@ This document tracks the phased implementation of alpha-excel v2.0. For architec
 
 5. **Integration Tests** (`tests/test_alpha_excel2/test_phase1_5_integration.py`)
    - End-to-end validation of Phase 1 + 1.5 components
-   - Field loading ’ operator application ’ result validation
+   - Field loading ï¿½ operator application ï¿½ result validation
    - Tests cache inheritance, masking, type awareness
 
 ### Test Breakdown
@@ -173,6 +173,93 @@ This document tracks the phased implementation of alpha-excel v2.0. For architec
 - **prefer_numpy attribute**: Operators choose optimal data structure (pandas vs numpy)
 - **Type-aware preprocessing**: Different rules per data type (numeric, group, weight)
 - **Single output masking**: Applied at Field and Operator levels (inputs already masked)
+
+### Known Issues and Workarounds
+
+**Issue: Non-Trading-Day Timestamps in Group Data**
+
+**Problem**: Group data (e.g., sector classifications) is often timestamped on non-trading days (e.g., month-end 2016-01-31 which is Sunday) while universe dates only include trading days (2016-01-28, 2016-01-29, 2016-02-01, ...).
+
+**Symptom**: When loading group fields, dates before the first data timestamp show all NaN values despite data being present in raw files.
+
+**Root Cause**: The current `_apply_forward_fill()` logic:
+1. Reindexes raw data to universe dates
+2. Applies forward-fill (ffill)
+3. Forward-fill only fills FORWARD in time, not backward
+4. If data timestamp (2016-01-31) is AFTER universe start dates (2016-01-28, 2016-01-29), those early dates remain NaN
+
+**Example**:
+```python
+# Raw data from DataSource
+{2016-01-31: 'Financial'}
+
+# Universe dates (trading days only)
+[2016-01-28, 2016-01-29, 2016-02-01, ...]
+
+# OLD LOGIC - After reindex(universe_dates, method='ffill')
+{2016-01-28: NaN, 2016-01-29: NaN, 2016-02-01: NaN, ...}
+         ^^^^^^^^^^^^^^^^^^^ Problem: all NaN because data comes after universe start
+
+# NEW LOGIC - After union + sort + reindex + ffill + reindex
+# Step 1: Union and sort
+all_dates = [2016-01-28, 2016-01-29, 2016-01-31, 2016-02-01, ...]
+
+# Step 2: Reindex to all_dates
+{2016-01-28: NaN, 2016-01-29: NaN, 2016-01-31: 'Financial', 2016-02-01: NaN, ...}
+
+# Step 3: Forward-fill
+{2016-01-28: NaN, 2016-01-29: NaN, 2016-01-31: 'Financial', 2016-02-01: 'Financial', ...}
+
+# Step 4: Reindex to universe_dates (removes 2016-01-31 non-trading day)
+{2016-01-28: NaN, 2016-01-29: NaN, 2016-02-01: 'Financial', 2016-02-02: 'Financial', ...}
+                                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^ Fixed!
+```
+
+**Solution**: Enhance `_apply_forward_fill()` to handle non-trading-day timestamps:
+1. Create union of raw data dates and universe dates
+2. Sort the union
+3. Reindex to union â†’ forward-fill â†’ reindex to universe dates
+
+**Implementation** (in `field_loader.py`):
+```python
+def _apply_forward_fill(self, data: pd.DataFrame) -> pd.DataFrame:
+    """Apply forward-fill transformation for low-frequency data.
+
+    Handles non-trading-day timestamps by including them in intermediate
+    index before forward-filling.
+    """
+    if not isinstance(data.index, pd.DatetimeIndex):
+        data.index = pd.to_datetime(data.index)
+
+    if self._universe_dates is None:
+        return data
+
+    # Create union of data dates and universe dates, then sort
+    all_dates = data.index.union(self._universe_dates).sort_values()
+
+    # Reindex to union, forward-fill, then select universe dates
+    data = data.reindex(all_dates).ffill().reindex(self._universe_dates)
+
+    return data
+```
+
+**Why this works**:
+- Non-trading-day timestamp (2016-01-31) is included in `all_dates`
+- Data at 2016-01-31 can forward-fill to 2016-02-01, 2016-02-02, ...
+- Final reindex removes non-trading day, keeping only universe dates
+- Dates before first data timestamp remain NaN (expected behavior)
+
+**Trade-offs**:
+- **Pro**: Simple, preserves forward-fill semantics
+- **Pro**: No artificial backward-fill logic
+- **Con**: Early universe dates (before first data timestamp) will be NaN
+
+**Alternative**: Fix data timestamps in ETL pipeline to use last trading day of month instead of calendar month-end. This is the ideal long-term solution but requires data reprocessing.
+
+**Status**: âœ… IMPLEMENTED in `src/alpha_excel2/core/field_loader.py` (lines 117-136)
+- Forward-fill preprocessing now uses union-based reindexing
+- Successfully handles non-trading-day timestamps
+- Verified with real fnguide_industry_group data (exp_36)
 
 ### Files Created
 
@@ -303,17 +390,17 @@ Phase 3 is divided into 6 sequential mini-phases with clear dependencies:
 
 ```
 Phase 3.1 (Scalers)             
-                                “
+                                ï¿½
 Phase 3.2 (ScalerManager)       <      
-                                      “
+                                      ï¿½
 Phase 2 (Operators)                  
-                            “         
+                            ï¿½         
 Phase 3.3 (Registry)        <         
-                            “          
+                            ï¿½          
 Phase 3.4 (Facade Core)     <          
-                            “
+                            ï¿½
 Phase 3.5 (Backtesting)     $
-                            “
+                            ï¿½
 Phase 3.6 (Integration)     
 ```
 
@@ -343,7 +430,7 @@ Phase 3.6 (Integration)     
      2. Split into positive and negative
      3. Scale positive to target_long = (gross + net) / 2
      4. Scale negative to target_short = (gross - net) / 2
-   - Example: GrossNetScaler(gross=2.0, net=0.0) ’ 100% long, 100% short (market neutral)
+   - Example: GrossNetScaler(gross=2.0, net=0.0) ï¿½ 100% long, 100% short (market neutral)
 
    **DollarNeutralScaler** (5 tests):
    - Shorthand for GrossNetScaler(gross=2.0, net=0.0)
@@ -422,7 +509,7 @@ weights = scaler.scale(signal)
 - Initialization and registry population (3 tests)
 - Setting scalers by class/name with parameters (5 tests)
 - Getting active scaler instance (4 tests)
-- Integration workflows: set ’ get ’ apply (3 tests)
+- Integration workflows: set ï¿½ get ï¿½ apply (3 tests)
 
 #### Files Created
 
@@ -444,9 +531,9 @@ weights = scaler.scale(signal)
      - Uses `importlib` to load modules
      - Uses `inspect` to find BaseOperator subclasses
    - **Category tracking**: Stores module name for each operator (timeseries, crosssection, group)
-   - **Name conversion**: CamelCase ’ snake_case with collision detection
-     - TsMean ’ ts_mean
-     - GroupNeutralize ’ group_neutralize
+   - **Name conversion**: CamelCase ï¿½ snake_case with collision detection
+     - TsMean ï¿½ ts_mean
+     - GroupNeutralize ï¿½ group_neutralize
      - Regex-based conversion handles edge cases
    - **Instantiate operators**: `Operator(universe_mask, config_manager, registry=None)`
    - **Set registry reference**: `operator._registry = self` (circular dependency handling)
@@ -618,7 +705,7 @@ print(signal.to_df().head())
        - Load returns data (lazy load + cache)
        - Shift weights forward 1 day (avoid lookahead)
        - Apply universe masks to weights and returns
-       - Element-wise multiply: weights × returns
+       - Element-wise multiply: weights ï¿½ returns
        - Return AlphaData(type='port_return')
      - `compute_long_returns(weights: AlphaData) -> AlphaData`
        - Filter weights > 0, then call compute_returns()
@@ -633,11 +720,11 @@ print(signal.to_df().head())
      - `_scaler_manager = ScalerManager()`
      - `_backtest_engine = BacktestEngine(field_loader, universe_mask, config_manager)`
    - **Delegation methods** (no business logic):
-     - `set_scaler(scaler, **params)` ’ Delegate to ScalerManager
-     - `to_weights(signal: AlphaData)` ’ Delegate to ScalerManager.get_active_scaler().scale()
-     - `to_portfolio_returns(weights)` ’ Delegate to BacktestEngine.compute_returns()
-     - `to_long_returns(weights)` ’ Delegate to BacktestEngine.compute_long_returns()
-     - `to_short_returns(weights)` ’ Delegate to BacktestEngine.compute_short_returns()
+     - `set_scaler(scaler, **params)` ï¿½ Delegate to ScalerManager
+     - `to_weights(signal: AlphaData)` ï¿½ Delegate to ScalerManager.get_active_scaler().scale()
+     - `to_portfolio_returns(weights)` ï¿½ Delegate to BacktestEngine.compute_returns()
+     - `to_long_returns(weights)` ï¿½ Delegate to BacktestEngine.compute_long_returns()
+     - `to_short_returns(weights)` ï¿½ Delegate to BacktestEngine.compute_short_returns()
 
 3. **Configuration File** (`config/backtest.yaml`) - NEW (5th config file)
    - MVP: Specify returns field name
@@ -681,7 +768,7 @@ print(signal.to_df().head())
   - to_weights() delegation (3 tests)
   - to_portfolio_returns() delegation (3 tests)
   - to_long_returns() and to_short_returns() (3 tests)
-  - End-to-end workflow: signal ’ weights ’ returns (2 tests)
+  - End-to-end workflow: signal ï¿½ weights ï¿½ returns (2 tests)
 
 #### Usage Example (After Implementation)
 
@@ -729,7 +816,7 @@ These features will be added to BacktestEngine in future phases:
    - Custom execution prices
 
 2. **Share-Based Position Sizing**:
-   - Convert dollar weights ’ integer share counts
+   - Convert dollar weights ï¿½ integer share counts
    - Requires `book_size` parameter and `adj_close` data
    - More realistic (no fractional shares)
 
@@ -752,7 +839,7 @@ These features will be added to BacktestEngine in future phases:
 
 ---
 
-### Phase 3.6: Integration & Validation =Ë PLANNED
+### Phase 3.6: Integration & Validation =ï¿½ PLANNED
 
 **Dependencies**: All previous Phase 3 mini-phases
 
@@ -761,7 +848,7 @@ These features will be added to BacktestEngine in future phases:
 #### Components to Implement
 
 1. **End-to-End Integration Tests** (`tests/test_alpha_excel2/test_phase3_integration.py`)
-   - Complete workflow: init ’ field ’ operators ’ scaler ’ backtesting
+   - Complete workflow: init ï¿½ field ï¿½ operators ï¿½ scaler ï¿½ backtesting
    - Multi-operator chains with cache inheritance
    - Different scaler strategies
    - Performance validation
@@ -785,7 +872,7 @@ These features will be added to BacktestEngine in future phases:
 #### Test Focus Areas
 
 - **End-to-end workflows** (5 tests):
-  - Signal generation ’ weights ’ returns ’ analysis
+  - Signal generation ï¿½ weights ï¿½ returns ï¿½ analysis
   - Multiple operator types in single chain
   - Cache inheritance across full pipeline
 
@@ -836,7 +923,7 @@ These features will be added to BacktestEngine in future phases:
 - Phase 3.5 (Backtesting ~35 tests)
 - Phase 3.6 (Integration ~20 tests)
 
-**Implementation Order**: 3.1  ’ 3.2  ’ 3.3  ’ 3.4  ’ 3.5 (3.5a + 3.5b) ’ 3.6 (sequential)
+**Implementation Order**: 3.1  ï¿½ 3.2  ï¿½ 3.3  ï¿½ 3.4  ï¿½ 3.5 (3.5a + 3.5b) ï¿½ 3.6 (sequential)
 
 **Key Architectural Benefits**:
 - Facade remains thin coordinator (delegates to BacktestEngine, not business logic)
@@ -846,7 +933,7 @@ These features will be added to BacktestEngine in future phases:
 
 ---
 
-## Phase 4: Testing & Migration =Ë PLANNED
+## Phase 4: Testing & Migration =ï¿½ PLANNED
 
 **Dependencies**: Phase 3 complete
 
@@ -879,7 +966,7 @@ These features will be added to BacktestEngine in future phases:
 
 ### Tasks
 
-#### 4.1: v1.0 ’ v2.0 Migration
+#### 4.1: v1.0 ï¿½ v2.0 Migration
 
 - [ ] Document breaking changes
 - [ ] Create migration guide

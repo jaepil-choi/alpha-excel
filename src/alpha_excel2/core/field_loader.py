@@ -12,6 +12,7 @@ Design:
 
 from typing import Dict, Optional
 import pandas as pd
+import numpy as np
 
 from .alpha_data import AlphaData
 from .universe_mask import UniverseMask
@@ -111,15 +112,29 @@ class FieldLoader:
             for col in data_df.columns:
                 data_df[col] = data_df[col].astype('category')
 
-        # Step 4: Apply OUTPUT MASK (reindex to universe)
-        data_df = self._universe_mask.apply_mask(data_df)
-
-        # Step 5: Apply forward-fill (AFTER reindexing)
-        # This is critical for group data: monthly data gets reindexed to daily,
-        # introducing NaN for days between months. Forward-fill propagates values.
+        # Step 4 & 5: Apply forward-fill THEN reindex to universe
+        # (Order matters for data timestamped on non-trading days)
         preprocessing_config = self._config_manager.get_preprocessing_config(data_type)
         if preprocessing_config.get('forward_fill', False):
-            data_df = data_df.ffill()
+            # For forward-fill data (e.g., group/sector data timestamped on non-trading days),
+            # we need to preserve the original timestamps before reindexing
+            universe_dates = self._universe_mask._data.index
+
+            # Union data dates with universe dates to preserve non-trading-day timestamps
+            all_dates = data_df.index.union(universe_dates).sort_values()
+
+            # Reindex to union, forward-fill, then select universe dates
+            data_df = data_df.reindex(all_dates).ffill().reindex(universe_dates)
+
+            # Now apply column reindexing (to match universe assets)
+            universe_assets = self._universe_mask._data.columns
+            data_df = data_df.reindex(columns=universe_assets)
+
+            # Apply mask (set values to NaN where universe mask is False)
+            data_df = data_df.where(self._universe_mask._data, np.nan)
+        else:
+            # For non-forward-fill data, use standard apply_mask (reindex to universe)
+            data_df = self._universe_mask.apply_mask(data_df)
 
         # Step 6: Construct AlphaData(step=0, cached=False)
         # Fields are NOT cached in step history unless explicitly requested
