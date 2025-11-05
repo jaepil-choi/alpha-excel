@@ -165,8 +165,30 @@ class AlphaData(DataModel):
             result_data = op_func(self._data, other._data)
             new_step_counter = max(self._step_counter, other._step_counter) + 1
 
-            # Simple cache inheritance (copy only, don't add self)
-            merged_cache = self._cache + other._cache
+            # Cache inheritance: copy upstream caches AND add cached operands
+            merged_cache = []
+
+            # Add left operand's upstream cache
+            merged_cache.extend(self._cache)
+
+            # If left operand is cached, add it
+            if self._cached:
+                merged_cache.append(CachedStep(
+                    step=self._step_counter,
+                    name=self._build_expression_string(),
+                    data=self._data.copy()
+                ))
+
+            # Add right operand's upstream cache
+            merged_cache.extend(other._cache)
+
+            # If right operand is cached, add it
+            if other._cached:
+                merged_cache.append(CachedStep(
+                    step=other._step_counter,
+                    name=other._build_expression_string(),
+                    data=other._data.copy()
+                ))
 
             # Simple history merge
             new_history = self._step_history + other._step_history
@@ -175,7 +197,18 @@ class AlphaData(DataModel):
             # Scalar operation
             result_data = op_func(self._data, other)
             new_step_counter = self._step_counter + 1
+
+            # Cache inheritance for scalar operations
             merged_cache = self._cache.copy()
+
+            # If self is cached, add it
+            if self._cached:
+                merged_cache.append(CachedStep(
+                    step=self._step_counter,
+                    name=self._build_expression_string(),
+                    data=self._data.copy()
+                ))
+
             new_history = self._step_history.copy()
             expr_str = f"({self._build_expression_string()} {op_name} {other})"
 

@@ -13,7 +13,7 @@ import re
 
 from alpha_excel2.core.universe_mask import UniverseMask
 from alpha_excel2.core.config_manager import ConfigManager
-from alpha_excel2.ops.base import BaseOperator
+# Note: BaseOperator imported in _discover_operators to avoid circular import
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +47,7 @@ class OperatorRegistry:
         """
         self._universe_mask = universe_mask
         self._config_manager = config_manager
-        self._operators: Dict[str, BaseOperator] = {}
+        self._operators: Dict[str, object] = {}  # BaseOperator instances (imported in _discover_operators)
         self._operator_categories: Dict[str, str] = {}
         self._discover_operators()
 
@@ -68,6 +68,11 @@ class OperatorRegistry:
             RuntimeError: If two operators convert to the same snake_case name
             ImportError: If a module cannot be imported
         """
+        # Import here to avoid circular dependency
+        # (core.__init__ imports this class, which would import ops.base,
+        # which imports core.alpha_data, which imports core.__init__ again)
+        from alpha_excel2.ops.base import BaseOperator
+
         ops_dir = Path(__file__).parent.parent / 'ops'
 
         # Find all .py files in ops/ (excluding __init__.py and base.py)
