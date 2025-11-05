@@ -69,7 +69,7 @@ class UniverseMask(DataModel):
                 ) from e
 
         self._data = mask
-        self._data_type = DataType.MASK
+        self._data_type = DataType.BOOLEAN
 
     def apply_mask(self, data: pd.DataFrame) -> pd.DataFrame:
         """Apply OUTPUT MASKING to data.
