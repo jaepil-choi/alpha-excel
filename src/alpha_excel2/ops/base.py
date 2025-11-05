@@ -136,6 +136,8 @@ class BaseOperator(ABC):
     def _validate_types(self, inputs: Tuple[AlphaData, ...]):
         """Check input types match expected types.
 
+        Supports both concrete types (str) and abstract types (frozenset).
+
         Args:
             inputs: Tuple of AlphaData inputs
 
@@ -149,11 +151,21 @@ class BaseOperator(ABC):
             )
 
         for i, (inp, expected_type) in enumerate(zip(inputs, self.input_types)):
-            if inp._data_type != expected_type:
-                raise TypeError(
-                    f"{self.__class__.__name__}: Input {i}: "
-                    f"expected type '{expected_type}', got '{inp._data_type}'"
-                )
+            # Handle abstract types (frozenset) - e.g., NUMTYPE
+            if isinstance(expected_type, frozenset):
+                if inp._data_type not in expected_type:
+                    raise TypeError(
+                        f"{self.__class__.__name__}: Input {i}: "
+                        f"expected one of {sorted(expected_type)}, got '{inp._data_type}'"
+                    )
+            # Handle concrete types (string) - e.g., 'numeric', 'group'
+            elif expected_type is not None:
+                if inp._data_type != expected_type:
+                    raise TypeError(
+                        f"{self.__class__.__name__}: Input {i}: "
+                        f"expected type '{expected_type}', got '{inp._data_type}'"
+                    )
+            # None means accept any type (for logical operators)
 
     def _extract_data(self, alpha_data: AlphaData) -> Union[pd.DataFrame, np.ndarray]:
         """Extract DataFrame or numpy array based on prefer_numpy.

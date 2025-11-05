@@ -8,6 +8,19 @@ Defines data types used throughout the system for type-aware operations.
 class DataType:
     """Data type constants for type-aware operations.
 
+    Type system with 6 concrete types and 1 abstract type:
+
+    Concrete types (semantic meaning):
+    - NUMERIC: Numerical data (returns, prices, signals)
+    - WEIGHT: Portfolio weights
+    - PORT_RETURN: Position-level returns
+    - GROUP: Categorical data (industry, sector)
+    - BOOLEAN: Boolean values (True/False, no NaN)
+    - OBJECT: Other types (fallback)
+
+    Abstract type (for operator validation):
+    - NUMTYPE: Groups NUMERIC, WEIGHT, PORT_RETURN (interchangeable for numeric operations)
+
     These types determine:
     - How data is preprocessed (forward-fill rules)
     - Which operators can be applied
@@ -15,22 +28,23 @@ class DataType:
     """
 
     NUMERIC = 'numeric'        # Numerical data (returns, prices, signals)
-    GROUP = 'group'            # Categorical data (industry, sector)
     WEIGHT = 'weight'          # Portfolio weights
     PORT_RETURN = 'port_return'  # Position-level returns
-    MASK = 'mask'              # Boolean masks (universe, events)
-    BOOLEAN = 'boolean'        # Boolean values from logical operators
+    GROUP = 'group'            # Categorical data (industry, sector)
+    BOOLEAN = 'boolean'        # Boolean values (True/False, no NaN)
     OBJECT = 'object'          # Other types (strings, etc.)
+
+    # Abstract type: numeric-like types (interchangeable for numeric operations)
+    NUMTYPE = frozenset([NUMERIC, WEIGHT, PORT_RETURN])
 
     @classmethod
     def all_types(cls):
         """Return all valid data types."""
         return [
             cls.NUMERIC,
-            cls.GROUP,
             cls.WEIGHT,
             cls.PORT_RETURN,
-            cls.MASK,
+            cls.GROUP,
             cls.BOOLEAN,
             cls.OBJECT,
         ]
