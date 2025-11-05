@@ -366,3 +366,189 @@ class TsDelta(BaseOperator):
 
         # Calculate difference: current - lagged
         return data - data.shift(window)
+
+
+class TsCountNans(BaseOperator):
+    """Time-series NaN counting operator.
+
+    Counts the number of NaN values in a rolling time window.
+    Useful for data quality monitoring and signal validity checking.
+
+    Example:
+        # Count missing prices in 20-day window
+        nan_count = o.ts_count_nans(close, window=20)
+
+        # Only use signals when data is complete
+        complete_data = nan_count == 0
+
+    Config:
+        min_periods_ratio (float): Minimum fraction of window that must have
+            valid (non-NaN) values. Default: 0.5 from operators.yaml.
+    """
+
+    input_types = ['numeric']
+    output_type = 'numeric'
+    prefer_numpy = False  # Use pandas rolling (C-optimized)
+
+    def compute(self, data: pd.DataFrame, window: int, **params) -> pd.DataFrame:
+        """Count NaN values in rolling window.
+
+        Args:
+            data: Input DataFrame (T, N) with time on rows, assets on columns
+            window: Rolling window size (number of periods)
+            **params: Additional parameters (currently unused)
+
+        Returns:
+            DataFrame with NaN counts (integers 0 to window)
+
+        Raises:
+            ValueError: If window is not a positive integer
+        """
+        if not isinstance(window, int) or window < 1:
+            raise ValueError(f"window must be a positive integer, got {window}")
+
+        # Get min_periods_ratio from config (default 0.5)
+        try:
+            operator_config = self._config_manager.get_operator_config('TsCountNans')
+            min_periods_ratio = operator_config.get('min_periods_ratio', 0.5)
+        except KeyError:
+            min_periods_ratio = 0.5
+
+        # Calculate min_periods: at least 1, at most window
+        min_periods = max(1, int(window * min_periods_ratio))
+
+        # Convert boolean NaN mask to float for summation
+        is_nan = data.isna().astype(float)
+
+        # Sum NaN indicators over rolling window
+        nan_count = is_nan.rolling(window=window, min_periods=min_periods).sum()
+
+        return nan_count
+
+
+class TsAny(BaseOperator):
+    """Rolling time-series any operator.
+
+    Checks if any value in rolling window satisfies condition (is True).
+    Used for detecting events within a time window.
+
+    Example:
+        # Detect surge events (>3% return in last 5 days)
+        surge = returns > 0.03
+        recent_surge = o.ts_any(surge, window=5)
+
+        # Check if any positive returns in past 10 days
+        any_gains = o.ts_any(returns > 0, window=10)
+
+    Note:
+        - Uses min_periods=1 (hardcoded) because "any" semantically means
+          "1 or more". We want to detect if ANY value is True, even with
+          partial window data.
+    """
+
+    input_types = ['boolean']
+    output_type = 'boolean'
+    prefer_numpy = False  # Use pandas rolling (C-optimized)
+
+    def compute(self, data: pd.DataFrame, window: int, **params) -> pd.DataFrame:
+        """Check if any value in rolling window is True.
+
+        Args:
+            data: Input boolean DataFrame (T, N) with time on rows, assets on columns
+            window: Rolling window size (number of periods)
+            **params: Additional parameters (currently unused)
+
+        Returns:
+            Boolean DataFrame where True means at least one True value in window
+
+        Raises:
+            ValueError: If window is not a positive integer
+        """
+        import numpy as np
+
+        if not isinstance(window, int) or window < 1:
+            raise ValueError(f"window must be a positive integer, got {window}")
+
+        # Hardcoded min_periods=1 (semantic requirement for "any")
+        min_periods = 1
+
+        # Sum counts True values (True=1, False=0)
+        count_true = data.astype(float).rolling(
+            window=window,
+            min_periods=min_periods
+        ).sum()
+
+        # Any True in window? (count > 0)
+        result = count_true > 0
+
+        # Where count is NaN, result should be NaN (not False)
+        result = result.where(~count_true.isna(), np.nan)
+
+        return result
+
+
+class TsAll(BaseOperator):
+    """Rolling time-series all operator.
+
+    Checks if all values in rolling window satisfy condition (are True).
+    Used for detecting sustained conditions within a time window.
+
+    Example:
+        # Detect sustained uptrend (positive returns for 5 days)
+        positive = returns > 0
+        uptrend = o.ts_all(positive, window=5)
+
+        # Check if all returns positive in past 10 days
+        all_gains = o.ts_all(returns > 0, window=10)
+
+    Config:
+        min_periods_ratio (float): Minimum fraction of window that must have
+            valid (non-NaN) values. Default: 0.5 from operators.yaml.
+    """
+
+    input_types = ['boolean']
+    output_type = 'boolean'
+    prefer_numpy = False  # Use pandas rolling (C-optimized)
+
+    def compute(self, data: pd.DataFrame, window: int, **params) -> pd.DataFrame:
+        """Check if all values in rolling window are True.
+
+        Args:
+            data: Input boolean DataFrame (T, N) with time on rows, assets on columns
+            window: Rolling window size (number of periods)
+            **params: Additional parameters (currently unused)
+
+        Returns:
+            Boolean DataFrame where True means all values in window are True
+
+        Raises:
+            ValueError: If window is not a positive integer
+        """
+        import numpy as np
+
+        if not isinstance(window, int) or window < 1:
+            raise ValueError(f"window must be a positive integer, got {window}")
+
+        # Get min_periods_ratio from config (default 0.5)
+        try:
+            operator_config = self._config_manager.get_operator_config('TsAll')
+            min_periods_ratio = operator_config.get('min_periods_ratio', 0.5)
+        except KeyError:
+            min_periods_ratio = 0.5
+
+        # Calculate min_periods: at least 1, at most window
+        min_periods = max(1, int(window * min_periods_ratio))
+
+        # Sum counts True values (True=1, False=0)
+        count_true = data.astype(float).rolling(
+            window=window,
+            min_periods=min_periods
+        ).sum()
+
+        # All True in window? (count == window size)
+        result = count_true == window
+
+        # Where count is NaN, result should be NaN (not False)
+        result = result.where(~count_true.isna(), np.nan)
+
+        return result
