@@ -5,10 +5,10 @@ This document compares operators implemented in legacy alpha-excel (v1.0) with t
 ## Summary Statistics
 
 - **Legacy v1.0 Total**: 44 operators
-- **Current v2.0 Total**: 33 operators (75% complete)
-- **Missing from v2.0**: 11 operators
+- **Current v2.0 Total**: 38 operators (86% complete)
+- **Missing from v2.0**: 6 operators
   - **Deferred for design discussion**: 4 operators (LabelQuantile, MapValues, CompositeGroup, Constant)
-  - **To be implemented**: 7 operators
+  - **To be implemented**: 2 operators
 
 ### Breakdown by Category
 
@@ -16,18 +16,18 @@ This document compares operators implemented in legacy alpha-excel (v1.0) with t
 |----------|------------|------------|------------|-------|
 | **Time-Series** | 15 | 15 | **100%** ✅ | Complete! All time-series operators ported |
 | **Cross-Section** | 2 | 1 | 50% | 1 deferred: LabelQuantile (design discussion needed) |
-| **Group** | 7 | 1 | 14% | 6 missing: GroupNeutralize (**critical**), GroupScalePositive (**critical**), GroupSum, GroupMax/Min, GroupCount |
+| **Group** | 7 | 6 | **86%** ✅ | 1 missing: GroupScalePositive (**critical** - deferred) |
 | **Arithmetic** | 7 | 7 | **100%** ✅ | Complete! |
 | **Logical** | 10 | 9 | 90% | 1 missing: IsNan |
 | **Transformation** | 2 | 0 | 0% | 2 deferred: MapValues, CompositeGroup (design discussion needed) |
 | **Constants** | 1 | 0 | 0% | 1 deferred: Constant (design discussion needed) |
-| **TOTAL** | **44** | **33** | **75%** | **7 to implement, 4 deferred** |
+| **TOTAL** | **44** | **38** | **86%** | **2 to implement, 4 deferred** |
 
 ---
 
 ## Implementation Status by Category
 
-### ✅ Implemented in v2.0 (33 operators)
+### ✅ Implemented in v2.0 (38 operators)
 
 #### Time-Series Operators (15/15 = 100%)
 
@@ -55,11 +55,16 @@ This document compares operators implemented in legacy alpha-excel (v1.0) with t
 |----------|--------|----------|
 | `Rank` | ✅ | `ops/crosssection.py:11-51` |
 
-#### Group Operators (1/7 = 14%)
+#### Group Operators (6/7 = 86%)
 
 | Operator | Status | Location |
 |----------|--------|----------|
 | `GroupRank` | ✅ | `ops/group.py:12-79` |
+| `GroupMax` | ✅ | `ops/group.py:81-143` |
+| `GroupMin` | ✅ | `ops/group.py:146-208` |
+| `GroupSum` | ✅ | `ops/group.py:211-274` |
+| `GroupCount` | ✅ | `ops/group.py:277-345` |
+| `GroupNeutralize` | ✅ | `ops/group.py:348-425` |
 
 #### Arithmetic Operators (7/7 = 100%)
 
@@ -89,7 +94,7 @@ This document compares operators implemented in legacy alpha-excel (v1.0) with t
 
 ---
 
-## ❌ Missing from v2.0 (11 operators)
+## ❌ Missing from v2.0 (6 operators)
 
 ### Time-Series Operators (0 missing)
 
@@ -103,22 +108,17 @@ This document compares operators implemented in legacy alpha-excel (v1.0) with t
 
 ---
 
-### Group Operators (6 missing)
+### Group Operators (0 missing, 1 deferred)
 
-| Operator | Description | Legacy Location | Priority | Performance |
-|----------|-------------|-----------------|----------|-------------|
-| `GroupNeutralize` | Remove group mean (sector-neutral) | `ops/group.py:287-351` | **Critical** | Row-by-row pandas |
-| `GroupSum` | Broadcast sum to group members | `ops/group.py:156-220` | High | Row-by-row pandas |
-| `GroupMax` | Broadcast max to group members | `ops/group.py:26-88` | Medium | Row-by-row pandas |
-| `GroupMin` | Broadcast min to group members | `ops/group.py:91-153` | Medium | Row-by-row pandas |
-| `GroupCount` | Broadcast member count | `ops/group.py:223-284` | Medium | Row-by-row pandas |
-| `GroupScalePositive` | Value-weighting within groups | `ops/group.py:403-566` | **Critical** | Row-by-row pandas |
+*All essential group operators are fully implemented! ✅*
 
-**Notes:**
-- **GroupNeutralize** and **GroupScalePositive** are CRITICAL for quantitative research
-- All current implementations use row-by-row pandas groupby
+**GroupScalePositive** (deferred):
+- **Description**: Value-weighting within groups
+- **Legacy Location**: `ops/group.py:403-566`
+- **Priority**: **Critical** for Fama-French factor construction
+- **Status**: Deferred (user requested to skip)
+- **Performance**: Row-by-row pandas groupby
 - **Optimization opportunity**: Can be rewritten with NumPy scatter-gather for 5x speedup (see `docs/research/faster-group-operations.md`)
-- GroupScalePositive is essential for Fama-French factor construction
 
 ---
 
@@ -153,9 +153,9 @@ This document compares operators implemented in legacy alpha-excel (v1.0) with t
 
 ---
 
-## 🔄 Deferred for Design Discussion (4 operators)
+## 🔄 Deferred for Design Discussion (5 operators)
 
-These operators require fundamental design discussions before implementation:
+These operators require fundamental design discussions or user decision before implementation:
 
 ### Cross-Section: LabelQuantile
 
@@ -181,6 +181,17 @@ These operators require fundamental design discussions before implementation:
 - Should CompositeGroup produce string concatenation or structured tuples?
 - Both are CRITICAL for multi-factor portfolio construction
 
+### Group Operators (Deferred)
+
+| Operator | Description | Legacy Location | Reason for Deferral |
+|----------|-------------|-----------------|---------------------|
+| `GroupScalePositive` | Value-weighting within groups | `ops/group.py:403-566` | User requested to skip for now (can implement later if needed) |
+
+**Design Questions:**
+- Essential for Fama-French factor construction
+- Scales positive values to sum to 1 within each group
+- Row-by-row pandas groupby implementation available
+
 ### Constants
 
 | Operator | Description | Legacy Location | Reason for Deferral |
@@ -200,53 +211,32 @@ These operators require fundamental design discussions before implementation:
 
 - **Arithmetic Operators**: 100% complete (7/7) ✅
 - **Time-Series Operators**: 100% complete (15/15) ✅
+- **Group Operators**: **86% complete (6/7)** ✅ - Major milestone!
 - **Logical/Comparison Operators**: 90% complete (9/10) ✅
 
 ### 🎯 Next Implementation Priorities
 
-Based on current status (75% overall completion), here are the recommended next steps:
+Based on current status (**86% overall completion**), here are the recommended next steps:
 
-#### Priority 1: Critical Group Operators (2 operators)
-**HIGHEST IMPACT** - Essential for quantitative research workflows
-
-| Operator | Impact | Performance Note |
-|----------|--------|------------------|
-| `GroupNeutralize` | **CRITICAL** for sector-neutral signals | Can be optimized with NumPy scatter-gather later |
-| `GroupScalePositive` | **CRITICAL** for value-weighting portfolios | Can be optimized with NumPy scatter-gather later |
-
-**Action**: Implement these first with pandas groupby (row-by-row). Optimize with NumPy later if needed.
-
----
-
-#### Priority 2: Group Utilities (4 operators)
-**MEDIUM IMPACT** - Peer-relative analysis
-
-| Operator | Use Case |
-|----------|----------|
-| `GroupSum` | Sum within groups |
-| `GroupMax/GroupMin` | Extremes within groups |
-| `GroupCount` | Group size information |
-
-**Action**: All use pandas groupby (row-by-row), similar to GroupRank.
-
----
-
-#### Priority 3: Remaining Logical Operator (1 operator)
+#### Priority 1: Remaining Logical Operator (1 operator)
 **LOW IMPACT** - Nice-to-have completeness
 
 | Operator | Category | Use Case |
 |----------|----------|----------|
 | `IsNan` | Logical | NaN detection (can be done with .isna()) |
 
+**Action**: Simple implementation, completes the Logical operator category.
+
 ---
 
-### 🔄 Deferred (Requires Design Discussion)
+### 🔄 Deferred (Requires Design Discussion or User Decision)
 
-These 4 operators require design decisions before implementation:
-1. `LabelQuantile` - Output type design
-2. `MapValues` - Mapping API design
-3. `CompositeGroup` - Label composition strategy
-4. `Constant` - Universe shape access pattern
+These 5 operators require design decisions or user direction before implementation:
+1. `LabelQuantile` - Output type design (cross-section)
+2. `MapValues` - Mapping API design (transformation)
+3. `CompositeGroup` - Label composition strategy (transformation)
+4. `Constant` - Universe shape access pattern (constants)
+5. `GroupScalePositive` - User requested to skip (group, can implement later)
 
 See "Deferred for Design Discussion" section above for details.
 
