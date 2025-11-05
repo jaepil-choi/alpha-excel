@@ -143,14 +143,19 @@ class AlphaData(DataModel):
         self,
         other: Union['AlphaData', float, int],
         op_name: str,
-        op_func
+        op_func,
+        output_type: str = None
     ) -> 'AlphaData':
-        """Helper method for binary arithmetic operations.
+        """Simplified helper for binary operations.
+
+        Magic methods are lightweight - they just do the pandas operation.
+        Full pipeline (masking, validation) happens in BaseOperator.
 
         Args:
             other: Right operand (AlphaData or scalar)
-            op_name: Operation name ('+', '-', '*', '/', '**')
+            op_name: Operation name ('+', '-', '&', '>', etc.)
             op_func: pandas operation function
+            output_type: Output data type (defaults to self._data_type)
 
         Returns:
             New AlphaData with result
@@ -158,68 +163,35 @@ class AlphaData(DataModel):
         # Compute result
         if isinstance(other, AlphaData):
             result_data = op_func(self._data, other._data)
-            other_expr = other._build_expression_string()
             new_step_counter = max(self._step_counter, other._step_counter) + 1
 
-            # Merge caches from both operands
-            merged_cache = self._cache.copy()
-            merged_cache.extend(other._cache)
+            # Simple cache inheritance (copy only, don't add self)
+            merged_cache = self._cache + other._cache
 
-            # Add cached operands themselves if they are cached
-            if self._cached:
-                merged_cache.append(CachedStep(
-                    step=self._step_counter,
-                    name=self._build_expression_string(),
-                    data=self._data.copy()
-                ))
-            if other._cached:
-                merged_cache.append(CachedStep(
-                    step=other._step_counter,
-                    name=other._build_expression_string(),
-                    data=other._data.copy()
-                ))
-
+            # Simple history merge
+            new_history = self._step_history + other._step_history
+            expr_str = f"({self._build_expression_string()} {op_name} {other._build_expression_string()})"
         else:
             # Scalar operation
             result_data = op_func(self._data, other)
-            other_expr = str(other)
             new_step_counter = self._step_counter + 1
-
-            # Only inherit cache from self
             merged_cache = self._cache.copy()
-            if self._cached:
-                merged_cache.append(CachedStep(
-                    step=self._step_counter,
-                    name=self._build_expression_string(),
-                    data=self._data.copy()
-                ))
-
-        # Build expression string
-        self_expr = self._build_expression_string()
-        new_expr = f"({self_expr} {op_name} {other_expr})"
-
-        # Merge step histories from both operands
-        if isinstance(other, AlphaData):
-            # AlphaData + AlphaData: merge both histories
             new_history = self._step_history.copy()
-            new_history.extend(other._step_history)
-        else:
-            # AlphaData + scalar: only self history
-            new_history = self._step_history.copy()
+            expr_str = f"({self._build_expression_string()} {op_name} {other})"
 
-        # Append current operation
+        # Add current step to history
         new_history.append({
             'step': new_step_counter,
-            'expr': new_expr,
+            'expr': expr_str,
             'op': op_name
         })
 
         return AlphaData(
             data=result_data,
-            data_type=self._data_type,
+            data_type=output_type if output_type else self._data_type,
             step_counter=new_step_counter,
             step_history=new_history,
-            cached=False,  # Result is not cached by default
+            cached=False,
             cache=merged_cache
         )
 
@@ -380,6 +352,182 @@ class AlphaData(DataModel):
             cached=False,
             cache=merged_cache
         )
+
+    def __abs__(self):
+        """Absolute value operator."""
+        result_data = self._data.abs()
+        new_expr = f"abs({self._build_expression_string()})"
+        new_step_counter = self._step_counter + 1
+
+        merged_cache = self._cache.copy()
+        if self._cached:
+            merged_cache.append(CachedStep(
+                step=self._step_counter,
+                name=self._build_expression_string(),
+                data=self._data.copy()
+            ))
+
+        new_history = self._step_history.copy()
+        new_history.append({
+            'step': new_step_counter,
+            'expr': new_expr,
+            'op': 'abs'
+        })
+
+        return AlphaData(
+            data=result_data,
+            data_type=self._data_type,
+            step_counter=new_step_counter,
+            step_history=new_history,
+            cached=False,
+            cache=merged_cache
+        )
+
+    # Comparison operators
+    def __gt__(self, other):
+        """Greater-than comparison operator."""
+        result = self._create_binary_op_result(
+            other, '>', lambda a, b: (a > b).fillna(False), output_type=DataType.BOOLEAN
+        )
+        return result
+
+    def __lt__(self, other):
+        """Less-than comparison operator."""
+        result = self._create_binary_op_result(
+            other, '<', lambda a, b: (a < b).fillna(False), output_type=DataType.BOOLEAN
+        )
+        return result
+
+    def __ge__(self, other):
+        """Greater-or-equal comparison operator."""
+        result = self._create_binary_op_result(
+            other, '>=', lambda a, b: (a >= b).fillna(False), output_type=DataType.BOOLEAN
+        )
+        return result
+
+    def __le__(self, other):
+        """Less-or-equal comparison operator."""
+        result = self._create_binary_op_result(
+            other, '<=', lambda a, b: (a <= b).fillna(False), output_type=DataType.BOOLEAN
+        )
+        return result
+
+    def __eq__(self, other):
+        """Equality comparison operator."""
+        result = self._create_binary_op_result(
+            other, '==', lambda a, b: (a == b).fillna(False), output_type=DataType.BOOLEAN
+        )
+        return result
+
+    def __ne__(self, other):
+        """Not-equal comparison operator."""
+        result = self._create_binary_op_result(
+            other, '!=', lambda a, b: (a != b).fillna(False), output_type=DataType.BOOLEAN
+        )
+        return result
+
+    # Logical operators
+    def __and__(self, other):
+        """Logical AND operator."""
+        # Convert inputs to boolean and apply AND
+        def logical_and(a, b):
+            bool_a = self._to_boolean_from_type(a, self._data_type)
+            if isinstance(other, AlphaData):
+                bool_b = self._to_boolean_from_type(b, other._data_type)
+            else:
+                # Convert scalar to boolean
+                if isinstance(other, (int, float)):
+                    bool_b = (other != 0) and not pd.isna(other)
+                else:
+                    bool_b = bool(other)
+            return bool_a & bool_b
+
+        return self._create_binary_op_result(
+            other, '&', logical_and, output_type=DataType.BOOLEAN
+        )
+
+    def __rand__(self, other):
+        """Reverse logical AND operator."""
+        return self.__and__(other)
+
+    def __or__(self, other):
+        """Logical OR operator."""
+        # Convert inputs to boolean and apply OR
+        def logical_or(a, b):
+            bool_a = self._to_boolean_from_type(a, self._data_type)
+            if isinstance(other, AlphaData):
+                bool_b = self._to_boolean_from_type(b, other._data_type)
+            else:
+                # Convert scalar to boolean
+                if isinstance(other, (int, float)):
+                    bool_b = (other != 0) and not pd.isna(other)
+                else:
+                    bool_b = bool(other)
+            return bool_a | bool_b
+
+        return self._create_binary_op_result(
+            other, '|', logical_or, output_type=DataType.BOOLEAN
+        )
+
+    def __ror__(self, other):
+        """Reverse logical OR operator."""
+        return self.__or__(other)
+
+    def __invert__(self):
+        """Logical NOT operator."""
+        # Convert to boolean and invert
+        bool_data = self._to_boolean_from_type(self._data, self._data_type)
+        result_data = ~bool_data
+
+        # Simple step tracking
+        new_step_counter = self._step_counter + 1
+        new_history = self._step_history.copy()
+        new_history.append({
+            'step': new_step_counter,
+            'expr': f"(~{self._build_expression_string()})",
+            'op': '~'
+        })
+
+        return AlphaData(
+            data=result_data,
+            data_type=DataType.BOOLEAN,
+            step_counter=new_step_counter,
+            step_history=new_history,
+            cached=False,
+            cache=self._cache.copy()
+        )
+
+    @staticmethod
+    def _to_boolean_from_type(data: pd.DataFrame, data_type: str) -> pd.DataFrame:
+        """Convert DataFrame to boolean based on data type.
+
+        Implements "data validity check" semantics:
+        - NUMTYPE (NUMERIC, WEIGHT, PORT_RETURN): Truthiness (0→False, non-zero→True, NaN→False)
+        - GROUP: Validity (non-NaN→True, NaN→False)
+        - BOOLEAN: As-is (NaN→False)
+        - OBJECT: Validity (non-NaN→True, NaN→False)
+
+        Args:
+            data: DataFrame to convert
+            data_type: Type of the data
+
+        Returns:
+            Boolean DataFrame with no NaN values
+        """
+        if data_type in DataType.NUMTYPE:
+            # Truthiness for numeric types: 0→False, non-zero→True, NaN→False
+            return (data != 0) & data.notna()
+        elif data_type == DataType.GROUP:
+            # Validity check for categorical: non-NaN→True, NaN→False
+            return data.notna()
+        elif data_type == DataType.BOOLEAN:
+            # Already boolean, but ensure NaN→False
+            return data.fillna(False)
+        elif data_type == DataType.OBJECT:
+            # Validity check: non-NaN→True, NaN→False
+            return data.notna()
+        else:
+            raise TypeError(f"Cannot convert type '{data_type}' to boolean")
 
     def __repr__(self) -> str:
         """Return string representation with expression."""
