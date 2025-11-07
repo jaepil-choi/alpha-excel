@@ -1,11 +1,10 @@
 """
 ConfigManager - Configuration file management
 
-Loads and provides access to 4 YAML configuration files:
-1. data.yaml - Field definitions for data loading
+Loads and provides access to 3 YAML configuration files:
+1. data.yaml - Field definitions for data loading (includes forward_fill per field)
 2. operators.yaml - Operator-specific configuration
 3. settings.yaml - Global settings
-4. preprocessing.yaml - Type-based preprocessing rules (NEW in v2.0)
 """
 
 import yaml
@@ -29,7 +28,6 @@ class ConfigManager:
         _data_config: Configuration from data.yaml
         _operators_config: Configuration from operators.yaml
         _settings_config: Configuration from settings.yaml
-        _preprocessing_config: Configuration from preprocessing.yaml
     """
 
     def __init__(self, config_path: str = 'config'):
@@ -44,7 +42,6 @@ class ConfigManager:
         self._data_config = self._load_yaml('data.yaml')
         self._operators_config = self._load_yaml('operators.yaml')
         self._settings_config = self._load_yaml('settings.yaml')
-        self._preprocessing_config = self._load_yaml('preprocessing.yaml')
 
     def _load_yaml(self, filename: str) -> Dict[str, Any]:
         """Load a YAML file, returning empty dict if not found.
@@ -90,19 +87,6 @@ class ConfigManager:
             )
         return self._data_config[field_name]
 
-    def get_preprocessing_config(self, data_type: str) -> Dict[str, Any]:
-        """Get preprocessing configuration for a data type.
-
-        Args:
-            data_type: Type of data (numeric, group, weight, etc.)
-
-        Returns:
-            Dictionary with preprocessing rules including:
-                - forward_fill: Whether to apply forward fill
-
-        Note: Returns empty dict if data type not configured (safe default)
-        """
-        return self._preprocessing_config.get(data_type, {})
 
     def get_operator_config(self, operator_name: str) -> Dict[str, Any]:
         """Get configuration for a specific operator.

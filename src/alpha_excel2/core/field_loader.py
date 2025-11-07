@@ -114,8 +114,9 @@ class FieldLoader:
 
         # Step 4 & 5: Apply forward-fill THEN reindex to universe
         # (Order matters for data timestamped on non-trading days)
-        preprocessing_config = self._config_manager.get_preprocessing_config(data_type)
-        if preprocessing_config.get('forward_fill', False):
+        # Read forward_fill setting directly from field config (not preprocessing.yaml)
+        should_forward_fill = field_config.get('forward_fill', False)
+        if should_forward_fill:
             # For forward-fill data (e.g., group/sector data timestamped on non-trading days),
             # we need to preserve the original timestamps before reindexing
             universe_dates = self._universe_mask._data.index

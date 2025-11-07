@@ -290,6 +290,130 @@ krx_sector_detail:
       AND date <= :end_date
 
 # ============================================================================
+# FnGuide Fundamentals (Monthly Data - All Forward-Filled)
+# ============================================================================
+
+# FnGuide: Sales revenue (매출액)
+# Monthly data - forward filled to daily frequency
+# Note: Values in raw KRW (converted from thousands by ETL)
+fnguide_sales:
+  db_type: parquet
+  data_type: numeric
+  forward_fill: true
+  table: FNGUIDE_FUNDA
+  index_col: date
+  security_col: symbol
+  value_col: sales
+  query: >
+    SELECT
+      date,
+      symbol,
+      sales
+    FROM read_parquet('data/fnguide/funda/**/*.parquet', hive_partitioning=true)
+    WHERE date >= :start_date
+      AND date <= :end_date
+
+# FnGuide: Common stock capital (보통주자본금)
+# Monthly data - forward filled to daily frequency
+# Note: Values in raw KRW (converted from thousands by ETL)
+fnguide_common_stock_capital:
+  db_type: parquet
+  data_type: numeric
+  forward_fill: true
+  table: FNGUIDE_FUNDA
+  index_col: date
+  security_col: symbol
+  value_col: common_stock_capital
+  query: >
+    SELECT
+      date,
+      symbol,
+      common_stock_capital
+    FROM read_parquet('data/fnguide/funda/**/*.parquet', hive_partitioning=true)
+    WHERE date >= :start_date
+      AND date <= :end_date
+
+# FnGuide: Deferred tax liabilities (이연법인세부채)
+# Monthly data - forward filled to daily frequency
+# Note: Values in raw KRW (converted from thousands by ETL)
+fnguide_deferred_tax_liabilities:
+  db_type: parquet
+  data_type: numeric
+  forward_fill: true
+  table: FNGUIDE_FUNDA
+  index_col: date
+  security_col: symbol
+  value_col: deferred_tax_liabilities
+  query: >
+    SELECT
+      date,
+      symbol,
+      deferred_tax_liabilities
+    FROM read_parquet('data/fnguide/funda/**/*.parquet', hive_partitioning=true)
+    WHERE date >= :start_date
+      AND date <= :end_date
+
+# FnGuide: Retained earnings (이익잉여금)
+# Monthly data - forward filled to daily frequency
+# Note: Values in raw KRW (converted from thousands by ETL)
+fnguide_retained_earnings:
+  db_type: parquet
+  data_type: numeric
+  forward_fill: true
+  table: FNGUIDE_FUNDA
+  index_col: date
+  security_col: symbol
+  value_col: retained_earnings
+  query: >
+    SELECT
+      date,
+      symbol,
+      retained_earnings
+    FROM read_parquet('data/fnguide/funda/**/*.parquet', hive_partitioning=true)
+    WHERE date >= :start_date
+      AND date <= :end_date
+
+# FnGuide: Treasury stock (자기주식)
+# Monthly data - forward filled to daily frequency
+# Note: Values in raw KRW (converted from thousands by ETL)
+fnguide_treasury_stock:
+  db_type: parquet
+  data_type: numeric
+  forward_fill: true
+  table: FNGUIDE_FUNDA
+  index_col: date
+  security_col: symbol
+  value_col: treasury_stock
+  query: >
+    SELECT
+      date,
+      symbol,
+      treasury_stock
+    FROM read_parquet('data/fnguide/funda/**/*.parquet', hive_partitioning=true)
+    WHERE date >= :start_date
+      AND date <= :end_date
+
+# FnGuide: Capital surplus (자본잉여금)
+# Monthly data - forward filled to daily frequency
+# Note: Values in raw KRW (converted from thousands by ETL)
+fnguide_capital_surplus:
+  db_type: parquet
+  data_type: numeric
+  forward_fill: true
+  table: FNGUIDE_FUNDA
+  index_col: date
+  security_col: symbol
+  value_col: capital_surplus
+  query: >
+    SELECT
+      date,
+      symbol,
+      capital_surplus
+    FROM read_parquet('data/fnguide/funda/**/*.parquet', hive_partitioning=true)
+    WHERE date >= :start_date
+      AND date <= :end_date
+
+# ============================================================================
 # FnGuide IR Events (Event Data - Boolean Indicators)
 # ============================================================================
 
