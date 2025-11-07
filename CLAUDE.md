@@ -324,12 +324,52 @@ System-wide settings like `buffer_days` for loading extra data to warm up rollin
 **Single OUTPUT Masking Strategy:**
 - OUTPUT MASKING: Applied after Field loading and Operator computation
 - NO INPUT MASKING: All inputs are already masked from upstream
-- Universe mask is immutable after AlphaExcel initialization
 - Use `data.where(universe_mask._data, np.nan)` for masking in pandas
 
 **Where Masking Occurs:**
 1. `FieldLoader.load()` - After loading field from DataSource
 2. `BaseOperator.__call__()` - After compute() returns result
+
+**Dynamic Universe Filtering (NEW in v2.0):**
+- Universe can be changed after initialization using `ae.set_universe(alpha_data)`
+- New universe must be a **strict subset** of original (can only shrink, never expand)
+- Triggers complete component rebuild (FieldLoader, OperatorRegistry, BacktestEngine)
+- User must manually reload references: `f = ae.field`, `o = ae.ops`
+
+**set_universe() Workflow:**
+```python
+# 1. Initialize with default universe
+ae = AlphaExcel(start_time='2023-01-01', end_time='2023-12-31')
+f = ae.field
+o = ae.ops
+
+# 2. Load field and create boolean mask
+cap = f('market_cap')
+large_cap_mask = cap >= 2e+11  # 200 billion threshold
+
+# 3. Apply filter
+ae.set_universe(large_cap_mask)
+# [WARNING: Universe mask changed! You MUST reload fields and operators]
+
+# 4. Reload references (REQUIRED)
+f = ae.field
+o = ae.ops
+
+# 5. All subsequent loads use filtered universe
+returns = f('returns')  # Only large-cap stocks
+```
+
+**Key Constraints:**
+- Input must be `AlphaData` with `data_type='boolean'`
+- Dates and securities must be subset of original universe
+- No False → True transitions allowed (expansion rejected)
+- Existing AlphaData objects become stale (user must reload)
+
+**Use Cases:**
+- Market cap filtering (large-cap only)
+- Liquidity screening (remove illiquid securities)
+- Dynamic rebalancing (change universe at rebalancing dates)
+- Sector focus (restrict to specific sectors)
 
 ### Operator Implementation (v2.0)
 

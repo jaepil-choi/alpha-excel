@@ -13,12 +13,14 @@ Design Principles:
 
 from typing import Optional, TYPE_CHECKING
 import pandas as pd
+import warnings
 
 from .config_manager import ConfigManager
 from .universe_mask import UniverseMask
 from .field_loader import FieldLoader
 from .operator_registry import OperatorRegistry
 from .alpha_data import AlphaData
+from .types import DataType
 from alpha_database.core.data_source import DataSource
 
 # Avoid circular imports: portfolio depends on core, so use lazy imports
@@ -381,3 +383,189 @@ class AlphaExcel:
             >>> short_sharpe = short_pnl.diff().mean() / short_pnl.diff().std() * np.sqrt(252)
         """
         return self._backtest_engine.compute_short_returns(weights)
+
+    # ========================================================================
+    # Phase 3.6: Dynamic Universe Changes
+    # ========================================================================
+
+    def set_universe(self, new_universe: AlphaData):
+        """Change universe mask to a subset of the original universe.
+
+        The new universe must be a strict subset (cannot add securities or dates
+        not in the original universe). This method rebuilds all internal components,
+        invalidating existing AlphaData objects.
+
+        **WARNING - INVALIDATION:**
+        After calling set_universe(), all existing AlphaData objects have STALE
+        masking. You MUST:
+        - Reassign: f = ae.field, o = ae.ops
+        - Reload all fields: returns = f('returns')
+        - Recreate all signals with new operators
+
+        **BEST PRACTICE:**
+        Call set_universe() IMMEDIATELY after AlphaExcel initialization,
+        BEFORE loading any fields or applying operators.
+
+        **ANTI-PATTERN (causes inconsistency):**
+            >>> returns = f('returns')  # Uses default universe
+            >>> ae.set_universe(new_mask)  # Invalidates returns!
+            >>> signal = o.ts_mean(returns, 5)  # Mixes old and new universe
+
+        **CORRECT PATTERN:**
+            >>> ae = AlphaExcel('2024-01-01', '2024-12-31')
+            >>> # Define custom universe from field operations
+            >>> market_cap = f('market_cap')
+            >>> large_cap_mask = o.greater(market_cap, 1_000_000_000)
+            >>> # Change universe BEFORE loading other fields
+            >>> ae.set_universe(large_cap_mask)
+            >>> # Reload references
+            >>> f = ae.field
+            >>> o = ae.ops
+            >>> # Now load fields with new universe
+            >>> returns = f('returns')
+            >>> signal = o.ts_mean(returns, 5)
+
+        Args:
+            new_universe: AlphaData with data_type='boolean'
+                         True = in new universe, False = excluded
+
+        Raises:
+            TypeError: If new_universe is not AlphaData or not boolean type
+            ValueError: If new universe is not a subset of original universe
+
+        Example:
+            >>> # Define custom universe from market cap
+            >>> market_cap = f('market_cap')
+            >>> large_cap_mask = o.greater(market_cap, 1_000_000_000)
+            >>>
+            >>> # Change universe (invalidates all existing data)
+            >>> ae.set_universe(large_cap_mask)
+            >>>
+            >>> # Reload fields with new universe
+            >>> f = ae.field
+            >>> o = ae.ops
+            >>> returns = f('returns')  # Now uses large_cap_only universe
+        """
+        # === VALIDATION ===
+
+        # 1. Type check: must be AlphaData
+        if not isinstance(new_universe, AlphaData):
+            raise TypeError(
+                f"new_universe must be AlphaData, got {type(new_universe).__name__}"
+            )
+
+        # 2. Data type check: must be boolean
+        if new_universe._data_type != DataType.BOOLEAN:
+            raise TypeError(
+                f"new_universe data_type must be 'boolean', got '{new_universe._data_type}'"
+            )
+
+        # 3. Extract DataFrame
+        new_mask_df = new_universe.to_df()
+
+        # 4. Validate subset constraint
+        self._validate_universe_subset(new_mask_df)
+
+        # === WARNING ===
+
+        print("\n" + "="*70)
+        print("WARNING: Universe mask changed!")
+        print("="*70)
+        print("All existing AlphaData objects now have STALE masking.")
+        print("You MUST reload fields and operators:")
+        print("  f = ae.field")
+        print("  o = ae.ops")
+        print("  returns = f('returns')  # Re-load with new universe")
+        print("="*70 + "\n")
+
+        # === REBUILD COMPONENTS ===
+
+        # 1. Create new UniverseMask
+        self._universe_mask = UniverseMask(new_mask_df)
+
+        # 2. Rebuild FieldLoader (clears cache)
+        self._field_loader = FieldLoader(
+            data_source=self._data_source,
+            universe_mask=self._universe_mask,
+            config_manager=self._config_manager,
+            default_start_time=self._start_time,
+            default_end_time=self._end_time
+        )
+
+        # 3. Rebuild OperatorRegistry (recreates all operators)
+        self._ops = OperatorRegistry(
+            universe_mask=self._universe_mask,
+            config_manager=self._config_manager
+        )
+
+        # 4. Rebuild BacktestEngine (uses new field_loader and universe_mask)
+        from alpha_excel2.portfolio.backtest_engine import BacktestEngine
+        self._backtest_engine = BacktestEngine(
+            field_loader=self._field_loader,
+            universe_mask=self._universe_mask,
+            config_manager=self._config_manager
+        )
+
+        # Note: ScalerManager unchanged (no universe dependency)
+
+    def _validate_universe_subset(self, new_mask_df: pd.DataFrame):
+        """Validate that new universe is a strict subset of original.
+
+        Rules:
+        1. New dates must be subset of original dates
+        2. New securities must be subset of original securities
+        3. New universe can only have True → False transitions (shrinking)
+           False → True transitions would require re-loading data (not allowed)
+
+        Args:
+            new_mask_df: New universe mask DataFrame
+
+        Raises:
+            ValueError: If new universe violates subset constraint
+        """
+        # UniverseMask stores data in _data attribute
+        original_mask_df = self._universe_mask._data
+
+        # Check 1: Dates must be subset
+        new_dates = new_mask_df.index
+        original_dates = original_mask_df.index
+
+        if not new_dates.isin(original_dates).all():
+            invalid_dates = new_dates[~new_dates.isin(original_dates)]
+            raise ValueError(
+                f"New universe contains dates not in original universe: "
+                f"{invalid_dates.tolist()[:5]}..."  # Show first 5
+            )
+
+        # Check 2: Securities must be subset
+        new_securities = new_mask_df.columns
+        original_securities = original_mask_df.columns
+
+        if not new_securities.isin(original_securities).all():
+            invalid_securities = new_securities[~new_securities.isin(original_securities)]
+            raise ValueError(
+                f"New universe contains securities not in original universe: "
+                f"{invalid_securities.tolist()[:5]}..."  # Show first 5
+            )
+
+        # Check 3: No False → True transitions (expansion)
+        # Reindex new mask to match original shape
+        new_mask_aligned = new_mask_df.reindex(
+            index=original_dates,
+            columns=original_securities,
+            fill_value=False  # Missing entries are False
+        )
+
+        # Where original is False, new must also be False
+        invalid_expansion = (~original_mask_df) & new_mask_aligned
+
+        if invalid_expansion.any().any():
+            # Find specific violations for error message
+            violation_coords = invalid_expansion.stack()
+            violation_coords = violation_coords[violation_coords].head()
+
+            raise ValueError(
+                f"New universe cannot expand beyond original universe. "
+                f"Found True values where original was False:\n"
+                f"{violation_coords}"
+            )

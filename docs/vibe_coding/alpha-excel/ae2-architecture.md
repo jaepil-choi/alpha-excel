@@ -644,6 +644,198 @@ def to_short_returns(self, weights: AlphaData) -> AlphaData:
     ...
 ```
 
+#### Dynamic Universe Filtering (set_universe)
+
+**NEW in v2.0**: Universe can be dynamically changed after initialization using `set_universe()` to filter the investment universe based on criteria like market cap, liquidity, or other characteristics.
+
+**Design Philosophy:**
+- Universe can only **shrink** (subset), never expand (no new securities/dates)
+- Component rebuild pattern ensures all components use the new universe
+- Explicit reload required (user must re-fetch fields and operators)
+- Warning message alerts user about stale references
+
+**API:**
+
+```python
+def set_universe(self, new_universe: AlphaData):
+    """
+    Change universe mask to a strict subset of the original universe.
+
+    Args:
+        new_universe: AlphaData with data_type='boolean'
+            - Index (dates) must be subset of original universe
+            - Columns (securities) must be subset of original universe
+            - Cannot expand (False → True transitions rejected)
+
+    Raises:
+        TypeError: If new_universe is not AlphaData or data_type is not 'boolean'
+        ValueError: If new universe contains dates/securities not in original
+        ValueError: If new universe attempts to expand (False → True)
+
+    Side Effects:
+        - Rebuilds FieldLoader (clears cache)
+        - Rebuilds OperatorRegistry (new universe reference)
+        - Rebuilds BacktestEngine (new universe reference)
+        - Prints warning message about stale references
+
+    Example:
+        # Load data and create filter
+        cap = f('market_cap')
+        large_cap_mask = cap >= 2e+11  # 200 billion threshold
+
+        # Change universe
+        ae.set_universe(large_cap_mask)
+
+        # REQUIRED: Reload references
+        f = ae.field
+        o = ae.ops
+
+        # All subsequent data loads use filtered universe
+        returns = f('returns')  # Only large-cap stocks
+    """
+```
+
+**Validation Logic (3-Step):**
+
+```python
+def _validate_universe_subset(self, new_mask_df: pd.DataFrame):
+    """Validate that new universe is a strict subset of original.
+
+    Validation Steps:
+    1. Date Subset Check: All dates in new universe must exist in original
+    2. Security Subset Check: All securities in new universe must exist in original
+    3. No Expansion Check: No False → True transitions allowed
+    """
+    original_mask_df = self._universe_mask._data
+
+    # Check 1: Dates must be subset
+    new_dates = new_mask_df.index
+    original_dates = original_mask_df.index
+    if not new_dates.isin(original_dates).all():
+        invalid_dates = new_dates[~new_dates.isin(original_dates)]
+        raise ValueError(
+            f"New universe contains dates not in original universe: "
+            f"{invalid_dates.tolist()[:5]}..."
+        )
+
+    # Check 2: Securities must be subset
+    new_securities = new_mask_df.columns
+    original_securities = original_mask_df.columns
+    if not new_securities.isin(original_securities).all():
+        invalid_securities = new_securities[~new_securities.isin(original_securities)]
+        raise ValueError(
+            f"New universe contains securities not in original universe: "
+            f"{invalid_securities.tolist()[:5]}..."
+        )
+
+    # Check 3: No False → True transitions (expansion)
+    new_mask_aligned = new_mask_df.reindex(
+        index=original_dates,
+        columns=original_securities,
+        fill_value=False
+    )
+
+    invalid_expansion = (~original_mask_df) & new_mask_aligned
+    if invalid_expansion.any().any():
+        violation_coords = invalid_expansion.stack()
+        violation_coords = violation_coords[violation_coords].head()
+        raise ValueError(
+            f"New universe cannot expand beyond original universe. "
+            f"Found True values where original was False:\n{violation_coords}"
+        )
+```
+
+**Component Rebuild Pattern:**
+
+After validation, `set_universe()` rebuilds all universe-dependent components:
+
+```python
+# Update universe mask
+self._universe_mask = UniverseMask(new_mask_df)
+
+# Rebuild FieldLoader (clears cache)
+self._field_loader = FieldLoader(
+    data_source=self._data_source,
+    universe_mask=self._universe_mask,
+    config_manager=self._config_manager,
+    default_start_time=self._start_time,
+    default_end_time=self._end_time
+)
+
+# Rebuild OperatorRegistry (new universe reference)
+self._ops = OperatorRegistry(
+    universe_mask=self._universe_mask,
+    config_manager=self._config_manager
+)
+
+# Rebuild BacktestEngine (new universe reference)
+self._backtest_engine = BacktestEngine(
+    field_loader=self._field_loader,
+    universe_mask=self._universe_mask,
+    config_manager=self._config_manager
+)
+```
+
+**Why Full Rebuild?**
+- Finer-grained DI: Components receive `universe_mask` via constructor
+- Creating new instances ensures all components reference the new universe
+- FieldLoader cache invalidation prevents stale data
+- Cleaner than partial updates (no hidden state)
+
+**User Workflow (Best Practice):**
+
+```python
+# 1. Initialize with default universe
+ae = AlphaExcel(start_time='2023-01-01', end_time='2023-12-31')
+f = ae.field
+o = ae.ops
+
+# 2. Load field and create boolean mask
+cap = f('market_cap')
+large_cap_mask = o.greater_equal(cap, 2e+11)
+
+# 3. Apply filter
+ae.set_universe(large_cap_mask)
+# [WARNING: Universe mask changed! You MUST reload fields and operators:]
+
+# 4. Reload references (REQUIRED)
+f = ae.field
+o = ae.ops
+
+# 5. All subsequent loads use filtered universe
+returns = f('returns')  # Only large-cap stocks
+signal = o.ts_mean(returns, 20)
+```
+
+**Warning Message:**
+
+When `set_universe()` is called, a warning is printed to the console:
+
+```
+======================================================================
+WARNING: Universe mask changed!
+======================================================================
+All existing AlphaData objects now have STALE masking.
+You MUST reload fields and operators:
+  f = ae.field
+  o = ae.ops
+  returns = f('returns')  # Re-load with new universe
+======================================================================
+```
+
+**Key Design Decisions:**
+
+1. **Subset-Only Constraint**: Critical for correctness - expanding universe to new securities would cause DataSource failures (no data available)
+2. **Explicit Reload**: Pythonic "explicit is better than implicit" - user controls when to refresh references
+3. **Component Rebuild**: Leverages finer-grained DI architecture - clean separation of concerns
+4. **No Automatic Invalidation**: Existing AlphaData objects remain unchanged (stale) - user must reload
+
+**Use Cases:**
+- **Market cap filtering**: Filter to large-cap stocks (`cap >= threshold`)
+- **Liquidity screening**: Remove illiquid securities (`volume >= min_volume`)
+- **Dynamic rebalancing**: Change universe at rebalancing dates
+- **Sector focus**: Restrict to specific sectors (`sector.isin(['Tech', 'Finance'])`)
+
 ---
 
 ### F. FieldLoader (Auto-Loading with Type Awareness)
