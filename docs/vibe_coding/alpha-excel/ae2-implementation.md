@@ -688,6 +688,52 @@ print(signal.to_df().head())
 
 **Estimated Tests**: ~35 tests (20 BacktestEngine + 15 integration)
 
+#### Known Issue: Custom Config Path and Project Root Inference
+
+**Problem**: When users specify a custom config directory (e.g., `config_path='./ae-config'`) instead of the default `'config'`, the system incorrectly infers the project root.
+
+**Root Cause**: In `alpha_database.core.config.ConfigLoader.__init__()` (line 107):
+```python
+self.config_dir = Path(config_dir)  # e.g., './ae-config'
+# Assumes project root is parent of config directory
+self.project_root = self.config_dir.parent if self.config_dir.name == 'config' else self.config_dir
+```
+
+When `config_dir.name != 'config'` (e.g., `'ae-config'`), the logic sets `project_root = config_dir`, which is incorrect. This causes `ParquetReader` to look for data files INSIDE the config directory instead of the actual project root.
+
+**Flow**:
+1. User: `AlphaExcel(config_path='./ae-config')`
+2. AlphaExcel facade: `DataSource(config_path)` → passes `'./ae-config'`
+3. DataSource: `ConfigLoader(config_dir)` → passes `'./ae-config'`
+4. ConfigLoader: Sets `project_root = './ae-config'` (WRONG!)
+5. ParquetReader receives `project_root='./ae-config'` and fails to find data files
+6. Result: `IOException` when trying to load fields
+
+**Symptom**: When initializing AlphaExcel with custom config path:
+```python
+ae = AlphaExcel(
+    start_time='2016-01-28',
+    end_time='2025-09-30',
+    universe=None,
+    config_path='./ae-config'  # Custom config directory
+)
+```
+Fails with `IOException` at line 102 in facade.py during `_initialize_universe()`.
+
+**Solution Options**:
+1. **Option 1 (Workaround)**: Keep data files in project root, only use custom config directory for YAML files
+2. **Option 2 (Code Fix)**: Modify `ConfigLoader` to accept separate `config_dir` and `project_root` parameters
+3. **Option 3 (Code Fix)**: Improve `ConfigLoader` heuristic to better infer project root from custom config directories
+
+**Status**: Documented for future fix. Workaround: Use standard `config/` directory name or manually specify project root.
+
+**Files Affected**:
+- `src/alpha_database/core/config.py` (ConfigLoader, lines 99-107)
+- `src/alpha_database/core/data_source.py` (DataSource, line 65)
+- `src/alpha_excel2/core/facade.py` (AlphaExcel, line 99)
+
+---
+
 #### Key Architectural Change
 
 **Separation of Concerns:**
