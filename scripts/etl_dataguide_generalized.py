@@ -86,6 +86,25 @@ FILE_CONFIGS = {
             '이연법인세부채(천원)': 'deferred_tax_liabilities_thousand'
         },
         'preprocessing': 'funda_preprocessing'  # Convert thousands to raw KRW
+    },
+    'price_monthly': {
+        'input_file': 'dataguide_price_monthly.xlsx',
+        'output_dir': 'price_monthly',
+        'partition_cols': ['year', 'month'],
+        'column_map': {
+            **COMMON_METADATA_MAP,
+            '수정시가(원)': 'monthly_adj_open',
+            '수정주가(원)': 'monthly_adj_close',
+            '수익률 (1개월)(%)': 'monthly_return_pct',
+            '거래량(주)': 'monthly_trading_volume',
+            '거래대금(원)': 'monthly_trading_value',
+            '거래정지구분': 'monthly_trading_halt_status',
+            '관리구분': 'monthly_management_classification',
+            '시가총액 (보통-상장예정주식수 포함)(백만원)': 'monthly_market_cap_million',
+            '상장주식수 (보통)(주)': 'monthly_listed_shares_common',
+            '유동주식수(주)': 'monthly_float_shares'
+        },
+        'preprocessing': 'price_monthly_preprocessing'  # Convert market cap to raw won, handle status fields
     }
 }
 
@@ -326,6 +345,75 @@ def preprocess_funda_data(df: pd.DataFrame) -> pd.DataFrame:
     return df_clean
 
 
+def preprocess_price_monthly_data(df: pd.DataFrame) -> pd.DataFrame:
+    """Preprocess monthly price data to ensure clean data for alpha-database.
+
+    Transformations:
+    1. Convert monthly_market_cap from millions to won (multiply by 1,000,000)
+    2. Convert monthly_trading_halt_status to boolean monthly_is_trading_suspended
+    3. Convert monthly_management_classification to boolean monthly_is_issue
+    4. Enforce proper data types for all numeric fields
+
+    Args:
+        df: DataFrame with renamed columns
+
+    Returns:
+        Preprocessed DataFrame with clean data
+    """
+    logger.info(f"  Preprocessing monthly price data...")
+
+    df_clean = df.copy()
+
+    # 1. Market Cap: Convert from millions to won
+    if 'monthly_market_cap_million' in df_clean.columns:
+        logger.info(f"    Converting monthly_market_cap from millions to won...")
+        df_clean['monthly_market_cap'] = (df_clean['monthly_market_cap_million'] * 1_000_000).astype('Int64')
+        df_clean = df_clean.drop(columns=['monthly_market_cap_million'])
+        logger.info(f"    [OK] monthly_market_cap converted")
+
+    # 2. Trading Halt Status: Convert to boolean
+    if 'monthly_trading_halt_status' in df_clean.columns:
+        logger.info(f"    Converting monthly_trading_halt_status to monthly_is_trading_suspended...")
+        df_clean['monthly_is_trading_suspended'] = df_clean['monthly_trading_halt_status'] != '정상'
+        df_clean = df_clean.drop(columns=['monthly_trading_halt_status'])
+
+        n_suspended = df_clean['monthly_is_trading_suspended'].sum()
+        n_total = len(df_clean)
+        logger.info(f"    [OK] monthly_is_trading_suspended created ({n_suspended:,} / {n_total:,} suspended)")
+
+    # 3. Management Classification: Convert to boolean
+    if 'monthly_management_classification' in df_clean.columns:
+        logger.info(f"    Converting monthly_management_classification to monthly_is_issue...")
+        df_clean['monthly_is_issue'] = df_clean['monthly_management_classification'] != '일반'
+        df_clean = df_clean.drop(columns=['monthly_management_classification'])
+
+        n_issue = df_clean['monthly_is_issue'].sum()
+        n_total = len(df_clean)
+        logger.info(f"    [OK] monthly_is_issue created ({n_issue:,} / {n_total:,} with issues)")
+
+    # 4. Enforce numeric data types
+    logger.info(f"    Enforcing numeric data types...")
+
+    numeric_conversions = {
+        'monthly_adj_open': 'Int64',
+        'monthly_adj_close': 'Int64',
+        'monthly_return_pct': 'float64',
+        'monthly_trading_volume': 'Int64',
+        'monthly_trading_value': 'Int64',
+        'monthly_market_cap': 'Int64',
+        'monthly_listed_shares_common': 'Int64',
+        'monthly_float_shares': 'Int64'
+    }
+
+    for col, dtype in numeric_conversions.items():
+        if col in df_clean.columns:
+            df_clean[col] = df_clean[col].astype(dtype)
+
+    logger.info(f"  [OK] Monthly price preprocessing complete")
+
+    return df_clean
+
+
 def transform_dataguide_file(
     file_key: str,
     input_dir: Path,
@@ -335,7 +423,7 @@ def transform_dataguide_file(
     """Transform a DataGuide file based on its configuration.
 
     Args:
-        file_key: Key in FILE_CONFIGS ('groups', 'price', 'funda')
+        file_key: Key in FILE_CONFIGS ('groups', 'price', 'funda', 'price_monthly')
         input_dir: Directory containing input Excel files
         output_base: Base output directory for Parquet files
         test_mode: If True, only process first 10,000 rows for testing
@@ -386,8 +474,9 @@ def transform_dataguide_file(
         if file_key == 'groups':
             df_final['frequency'] = pd.Series([None] * len(df_final), dtype='object')
             logger.info(f"  Added 'frequency' column (set to None)")
-        elif file_key in ['price', 'funda']:
-            df_final['frequency'] = 'DAILY' if file_key == 'price' else 'MONTHLY'
+        elif file_key in ['price', 'funda', 'price_monthly']:
+            freq_map = {'price': 'DAILY', 'funda': 'MONTHLY', 'price_monthly': 'MONTHLY'}
+            df_final['frequency'] = freq_map[file_key]
             logger.info(f"  Added 'frequency' column (set to '{df_final['frequency'].iloc[0]}')")
 
     # 6. Apply preprocessing if specified
@@ -396,6 +485,8 @@ def transform_dataguide_file(
         df_final = preprocess_price_data(df_final)
     elif config['preprocessing'] == 'funda_preprocessing':
         df_final = preprocess_funda_data(df_final)
+    elif config['preprocessing'] == 'price_monthly_preprocessing':
+        df_final = preprocess_price_monthly_data(df_final)
     else:
         logger.info(f"  No preprocessing needed for {file_key}")
 
@@ -411,7 +502,10 @@ def transform_dataguide_file(
         logger.info(f"  No filtering needed for {file_key}")
 
     # 8. Add partition columns and save
-    logger.info(f"[8/8] Adding partition columns and saving...")
+    if test_mode:
+        logger.info(f"[8/8] Preparing data (TEST MODE - not saving)...")
+    else:
+        logger.info(f"[8/8] Adding partition columns and saving...")
 
     # Add partition columns based on config
     if 'year' in config['partition_cols']:
@@ -424,25 +518,34 @@ def transform_dataguide_file(
     # Convert date to string for storage
     df_final['date'] = df_final['date'].dt.strftime('%Y-%m-%d')
 
-    # Create output directory
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    # Save with hive partitioning
-    df_final.to_parquet(
-        output_dir,
-        partition_cols=config['partition_cols'],
-        index=False,
-        engine='pyarrow'
-    )
-
     # Statistics
     n_partitions = df_final[config['partition_cols']].drop_duplicates().shape[0]
-    logger.info(f"  [OK] Saved to: {output_dir}")
-    logger.info(f"  [OK] Created {n_partitions} partitions")
-    logger.info(f"  [OK] Total rows: {df_final.shape[0]:,}")
-    logger.info(f"  [OK] Total columns: {df_final.shape[1]:,}")
 
-    # Show sample
+    if test_mode:
+        # TEST MODE: Don't save, just show what would be created
+        logger.info(f"  [TEST] Would save to: {output_dir}")
+        logger.info(f"  [TEST] Would create {n_partitions} partitions")
+        logger.info(f"  [TEST] Total rows: {df_final.shape[0]:,}")
+        logger.info(f"  [TEST] Total columns: {df_final.shape[1]:,}")
+    else:
+        # PRODUCTION MODE: Save to parquet
+        # Create output directory
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        # Save with hive partitioning
+        df_final.to_parquet(
+            output_dir,
+            partition_cols=config['partition_cols'],
+            index=False,
+            engine='pyarrow'
+        )
+
+        logger.info(f"  [OK] Saved to: {output_dir}")
+        logger.info(f"  [OK] Created {n_partitions} partitions")
+        logger.info(f"  [OK] Total rows: {df_final.shape[0]:,}")
+        logger.info(f"  [OK] Total columns: {df_final.shape[1]:,}")
+
+    # Show sample (both test and production)
     print("\n  Sample data (first 5 rows):")
     sample_df = df_final.drop(columns=config['partition_cols']).head()
     print(sample_df.to_string(index=False))
@@ -578,7 +681,7 @@ Examples:
     parser.add_argument(
         '--files',
         nargs='+',
-        choices=['groups', 'price', 'funda'],
+        choices=['groups', 'price', 'funda', 'price_monthly'],
         help='Specific files to process (default: all)'
     )
 

@@ -414,6 +414,203 @@ fnguide_capital_surplus:
       AND date <= :end_date
 
 # ============================================================================
+# FnGuide Monthly Price Data (Monthly Aggregated - All Forward-Filled)
+# ============================================================================
+
+# FnGuide: Monthly adjusted open price (월간 수정시가)
+# Monthly data - forward filled to daily frequency
+monthly_adj_open:
+  db_type: parquet
+  data_type: numeric
+  forward_fill: true
+  table: FNGUIDE_PRICE_MONTHLY
+  index_col: date
+  security_col: symbol
+  value_col: monthly_adj_open
+  query: >
+    SELECT
+      date,
+      symbol,
+      monthly_adj_open
+    FROM read_parquet('data/fnguide/price_monthly/**/*.parquet', hive_partitioning=true)
+    WHERE date >= :start_date
+      AND date <= :end_date
+
+# FnGuide: Monthly adjusted close price (월간 수정주가)
+# Monthly data - forward filled to daily frequency
+monthly_adj_close:
+  db_type: parquet
+  data_type: numeric
+  forward_fill: true
+  table: FNGUIDE_PRICE_MONTHLY
+  index_col: date
+  security_col: symbol
+  value_col: monthly_adj_close
+  query: >
+    SELECT
+      date,
+      symbol,
+      monthly_adj_close
+    FROM read_parquet('data/fnguide/price_monthly/**/*.parquet', hive_partitioning=true)
+    WHERE date >= :start_date
+      AND date <= :end_date
+
+# FnGuide: Monthly return percentage (월간 수익률)
+# Monthly data - forward filled to daily frequency
+monthly_return_pct:
+  db_type: parquet
+  data_type: numeric
+  forward_fill: true
+  table: FNGUIDE_PRICE_MONTHLY
+  index_col: date
+  security_col: symbol
+  value_col: monthly_return_pct
+  query: >
+    SELECT
+      date,
+      symbol,
+      monthly_return_pct
+    FROM read_parquet('data/fnguide/price_monthly/**/*.parquet', hive_partitioning=true)
+    WHERE date >= :start_date
+      AND date <= :end_date
+
+# FnGuide: Monthly trading volume (월간 거래량)
+# Monthly data - forward filled to daily frequency
+monthly_trading_volume:
+  db_type: parquet
+  data_type: numeric
+  forward_fill: true
+  table: FNGUIDE_PRICE_MONTHLY
+  index_col: date
+  security_col: symbol
+  value_col: monthly_trading_volume
+  query: >
+    SELECT
+      date,
+      symbol,
+      monthly_trading_volume
+    FROM read_parquet('data/fnguide/price_monthly/**/*.parquet', hive_partitioning=true)
+    WHERE date >= :start_date
+      AND date <= :end_date
+
+# FnGuide: Monthly trading value (월간 거래대금)
+# Monthly data - forward filled to daily frequency
+monthly_trading_value:
+  db_type: parquet
+  data_type: numeric
+  forward_fill: true
+  table: FNGUIDE_PRICE_MONTHLY
+  index_col: date
+  security_col: symbol
+  value_col: monthly_trading_value
+  query: >
+    SELECT
+      date,
+      symbol,
+      monthly_trading_value
+    FROM read_parquet('data/fnguide/price_monthly/**/*.parquet', hive_partitioning=true)
+    WHERE date >= :start_date
+      AND date <= :end_date
+
+# FnGuide: Monthly listed shares - common stock (월간 상장주식수 보통주)
+# Monthly data - forward filled to daily frequency
+monthly_listed_shares_common:
+  db_type: parquet
+  data_type: numeric
+  forward_fill: true
+  table: FNGUIDE_PRICE_MONTHLY
+  index_col: date
+  security_col: symbol
+  value_col: monthly_listed_shares_common
+  query: >
+    SELECT
+      date,
+      symbol,
+      monthly_listed_shares_common
+    FROM read_parquet('data/fnguide/price_monthly/**/*.parquet', hive_partitioning=true)
+    WHERE date >= :start_date
+      AND date <= :end_date
+
+# FnGuide: Monthly float shares (월간 유동주식수)
+# Monthly data - forward filled to daily frequency
+monthly_float_shares:
+  db_type: parquet
+  data_type: numeric
+  forward_fill: true
+  table: FNGUIDE_PRICE_MONTHLY
+  index_col: date
+  security_col: symbol
+  value_col: monthly_float_shares
+  query: >
+    SELECT
+      date,
+      symbol,
+      monthly_float_shares
+    FROM read_parquet('data/fnguide/price_monthly/**/*.parquet', hive_partitioning=true)
+    WHERE date >= :start_date
+      AND date <= :end_date
+
+# FnGuide: Monthly market cap in won (월간 시가총액)
+# Monthly data - forward filled to daily frequency
+# Note: Converted from millions to won by ETL (multiply by 1,000,000)
+monthly_market_cap:
+  db_type: parquet
+  data_type: numeric
+  forward_fill: true
+  table: FNGUIDE_PRICE_MONTHLY
+  index_col: date
+  security_col: symbol
+  value_col: monthly_market_cap
+  query: >
+    SELECT
+      date,
+      symbol,
+      monthly_market_cap
+    FROM read_parquet('data/fnguide/price_monthly/**/*.parquet', hive_partitioning=true)
+    WHERE date >= :start_date
+      AND date <= :end_date
+
+# FnGuide: Monthly trading suspended status (월간 거래정지 여부)
+# Monthly data - forward filled to daily frequency
+# Boolean: True = trading suspended, False = normal trading
+monthly_is_trading_suspended:
+  db_type: parquet
+  data_type: boolean
+  forward_fill: true
+  table: FNGUIDE_PRICE_MONTHLY
+  index_col: date
+  security_col: symbol
+  value_col: monthly_is_trading_suspended
+  query: >
+    SELECT
+      date,
+      symbol,
+      monthly_is_trading_suspended
+    FROM read_parquet('data/fnguide/price_monthly/**/*.parquet', hive_partitioning=true)
+    WHERE date >= :start_date
+      AND date <= :end_date
+
+# FnGuide: Monthly management issue status (월간 관리종목 여부)
+# Monthly data - forward filled to daily frequency
+# Boolean: True = has issues, False = general (normal)
+monthly_is_issue:
+  db_type: parquet
+  data_type: boolean
+  forward_fill: true
+  table: FNGUIDE_PRICE_MONTHLY
+  index_col: date
+  security_col: symbol
+  value_col: monthly_is_issue
+  query: >
+    SELECT
+      date,
+      symbol,
+      monthly_is_issue
+    FROM read_parquet('data/fnguide/price_monthly/**/*.parquet', hive_partitioning=true)
+    WHERE date >= :start_date
+      AND date <= :end_date
+
+# ============================================================================
 # FnGuide IR Events (Event Data - Boolean Indicators)
 # ============================================================================
 
