@@ -62,6 +62,7 @@ class AlphaExcel:
         start_time: str | pd.Timestamp,
         end_time: Optional[str | pd.Timestamp] = None,
         universe: Optional[pd.DataFrame] = None,
+        universe_field: Optional[str] = None,
         config_path: str = 'config'
     ):
         """Initialize AlphaExcel facade with dependencies.
@@ -71,21 +72,32 @@ class AlphaExcel:
             end_time: End date for data loading (inclusive) - OPTIONAL
                      If None, loads data up to the latest available date
             universe: Optional universe mask DataFrame (T, N) with boolean values
-                     If None, creates default all-True universe on first field load
+                     If None, creates default universe from universe_field
+            universe_field: Optional field name to use for default universe creation
+                           If None, defaults to 'returns' (backward compatible)
+                           Field must exist in config/data.yaml
+                           Examples: 'returns' (daily), 'monthly_adj_close' (monthly w/ forward-fill)
             config_path: Path to config directory (default: 'config')
 
         Raises:
-            ValueError: If end_time < start_time
+            ValueError: If end_time < start_time or universe_field not in data.yaml
             TypeError: If universe is not a DataFrame
 
         Example:
-            >>> # With explicit end date
+            >>> # Default: uses 'returns' field for universe (backward compatible)
             >>> ae = AlphaExcel('2024-01-01', '2024-12-31')
+
+            >>> # Custom universe field (daily data)
+            >>> ae = AlphaExcel('2024-01-01', '2024-12-31', universe_field='fnguide_adj_close')
+
+            >>> # Custom universe field (monthly data with forward-fill)
+            >>> ae = AlphaExcel('2024-01-01', '2024-12-31', universe_field='monthly_adj_close')
+            >>> # Universe will be daily frequency (forward-filled monthly data)
 
             >>> # Load to latest available data (end_time=None)
             >>> ae = AlphaExcel('2024-01-01')
 
-            >>> # With custom universe
+            >>> # With custom universe DataFrame (overrides universe_field)
             >>> universe_df = pd.DataFrame(...)  # Boolean mask
             >>> ae = AlphaExcel('2024-01-01', '2024-12-31', universe=universe_df)
         """
@@ -101,7 +113,7 @@ class AlphaExcel:
         self._data_source = DataSource(config_path)
 
         # 4. UniverseMask (before others need it)
-        self._universe_mask = self._initialize_universe(universe)
+        self._universe_mask = self._initialize_universe(universe, universe_field)
 
         # 5. FieldLoader (inject dependencies explicitly, including default date range)
         self._field_loader = FieldLoader(
@@ -145,18 +157,39 @@ class AlphaExcel:
                 f"start_time ({self._start_time})"
             )
 
-    def _load_returns(self) -> pd.DataFrame:
-        """Load returns field with buffer for universe creation.
+    def _validate_universe_field(self, field_name: str):
+        """Validate that universe field exists in data.yaml.
+
+        Args:
+            field_name: Name of field to validate
+
+        Raises:
+            ValueError: If field_name not found in data.yaml
+        """
+        try:
+            # Try to get field config from ConfigManager
+            _ = self._config_manager.get_field_config(field_name)
+        except KeyError:
+            raise ValueError(
+                f"Universe field '{field_name}' not found in data.yaml. "
+                f"Please choose a valid field from config/data.yaml"
+            )
+
+    def _load_universe_field(self, field_name: str) -> pd.DataFrame:
+        """Load specified field with buffer for universe creation.
 
         Applies buffer_days from settings.yaml to load ~1 year of historical data.
         This ensures sufficient data for rolling operations and forward-fill.
 
+        Args:
+            field_name: Name of field to load from data.yaml (e.g., 'returns', 'monthly_adj_close')
+
         Returns:
-            Returns DataFrame (T, N) - RAW data before universe masking
+            Field DataFrame (T, N) - RAW data before universe masking
 
         Note:
             This is called BEFORE UniverseMask is created, so no masking is applied.
-            The raw returns data is used to derive the default universe mask.
+            The raw field data is used to derive the default universe mask.
         """
         # Get buffer_days from settings (default: 252 trading days ~= 1 year)
         buffer_days = self._config_manager.get_setting('data_loading.buffer_days', default=252)
@@ -165,41 +198,53 @@ class AlphaExcel:
         # Approximate: 252 trading days ~= 365 calendar days, use 1.5x factor for safety
         buffered_start = self._start_time - pd.Timedelta(days=int(buffer_days * 1.5))
 
-        # Load returns field directly from DataSource
+        # Load field directly from DataSource
         # We bypass FieldLoader because it requires UniverseMask, which we're creating
         # Note: DataSource expects start_date/end_date as strings
         end_date_str = self._end_time.strftime('%Y-%m-%d') if self._end_time else pd.Timestamp.now().strftime('%Y-%m-%d')
-        returns_df = self._data_source.load_field(
-            'returns',
+        field_df = self._data_source.load_field(
+            field_name,
             start_date=buffered_start.strftime('%Y-%m-%d'),
             end_date=end_date_str
         )
 
-        return returns_df
+        return field_df
 
-    def _initialize_universe(self, universe: Optional[pd.DataFrame]) -> UniverseMask:
-        """Initialize UniverseMask from user parameter or derive from returns.
+    def _initialize_universe(
+        self,
+        universe: Optional[pd.DataFrame],
+        universe_field: Optional[str]
+    ) -> UniverseMask:
+        """Initialize UniverseMask from user parameter or derive from specified field.
 
-        When universe=None, loads returns data and creates universe mask where
-        returns are not NaN. This follows the v1.0 pattern of deriving universe
-        from actual data availability.
+        When universe=None, loads universe_field (default: 'returns') and creates
+        universe mask where field data is not NaN. This derives universe from
+        actual data availability.
 
         Args:
             universe: Optional user-provided universe DataFrame
+            universe_field: Optional field name for universe creation (default: 'returns')
 
         Returns:
             UniverseMask instance
 
         Raises:
             TypeError: If universe is not None and not a DataFrame
+            ValueError: If universe_field not found in data.yaml
         """
         if universe is None:
-            # Load returns FIRST (mandatory for default universe)
-            # This ensures universe has the correct shape from actual data
-            returns_data = self._load_returns()
+            # Determine which field to use for universe creation
+            field_name = universe_field if universe_field is not None else 'returns'
 
-            # Create universe from returns: True where returns exist (not NaN)
-            universe_mask = ~returns_data.isna()
+            # Validate field exists in data.yaml
+            self._validate_universe_field(field_name)
+
+            # Load field FIRST (mandatory for default universe)
+            # This ensures universe has the correct shape from actual data
+            field_data = self._load_universe_field(field_name)
+
+            # Create universe from field: True where data exists (not NaN)
+            universe_mask = ~field_data.isna()
 
             # Filter to requested date range
             if self._end_time is not None:

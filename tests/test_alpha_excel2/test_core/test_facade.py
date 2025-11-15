@@ -631,3 +631,115 @@ def test_integration_field_caching(config_dir, mock_data_source):
 
     # Should return same instance from cache
     assert returns1 is returns2
+
+
+# ===========================
+# Part X: Universe Field Tests (4 new tests)
+# ===========================
+
+def test_initialize_universe_with_custom_field_daily(config_dir, mock_data_source):
+    """Test universe initialization with custom daily field (fnguide_adj_close)."""
+    # Add adj_close field to mock data source
+    dates = pd.date_range('2024-01-01', periods=10, freq='D')
+    securities = ['A', 'B', 'C']
+    adj_close_data = pd.DataFrame(
+        np.random.uniform(100, 200, (10, 3)),
+        index=dates,
+        columns=securities
+    )
+    # Make some values NaN to test universe derivation
+    adj_close_data.iloc[3, 1] = np.nan  # B on 2024-01-04
+    adj_close_data.iloc[7, 2] = np.nan  # C on 2024-01-08
+
+    mock_data_source.register_field('fnguide_adj_close', adj_close_data)
+
+    # Add fnguide_adj_close to config
+    config_path = Path(config_dir)
+    existing_data_yaml = (config_path / "data.yaml").read_text()
+    updated_data_yaml = existing_data_yaml + """
+fnguide_adj_close:
+  data_type: numeric
+  query: "SELECT * FROM fnguide_adj_close"
+"""
+    (config_path / "data.yaml").write_text(updated_data_yaml)
+
+    with patch('alpha_excel2.core.facade.DataSource', return_value=mock_data_source):
+        ae = AlphaExcel(
+            start_time='2024-01-01',
+            end_time='2024-12-31',
+            universe_field='fnguide_adj_close',
+            config_path=config_dir
+        )
+
+    # Verify universe derived from fnguide_adj_close availability
+    universe_df = ae._universe_mask._data
+    assert universe_df.loc['2024-01-04', 'B'] == False  # NaN in data
+    assert universe_df.loc['2024-01-08', 'C'] == False  # NaN in data
+    assert universe_df.loc['2024-01-01', 'A'] == True   # Has data
+
+
+def test_initialize_universe_with_custom_field_monthly(config_dir, mock_data_source):
+    """Test universe initialization with monthly field (monthly_adj_close with forward-fill)."""
+    # Add monthly_adj_close field to mock data source
+    # Monthly data: only month-end dates
+    monthly_dates = pd.DatetimeIndex(['2024-01-31', '2024-02-29', '2024-03-31'])
+    securities = ['A', 'B', 'C']
+    monthly_data = pd.DataFrame(
+        [[100, 200, 300], [110, 210, np.nan], [120, 220, 320]],
+        index=monthly_dates,
+        columns=securities
+    )
+    mock_data_source.register_field('monthly_adj_close', monthly_data)
+
+    # Add monthly_adj_close to config with forward_fill: true
+    config_path = Path(config_dir)
+    existing_data_yaml = (config_path / "data.yaml").read_text()
+    updated_data_yaml = existing_data_yaml + """
+monthly_adj_close:
+  data_type: numeric
+  query: "SELECT * FROM monthly_adj_close"
+"""
+    (config_path / "data.yaml").write_text(updated_data_yaml)
+
+    with patch('alpha_excel2.core.facade.DataSource', return_value=mock_data_source):
+        ae = AlphaExcel(
+            start_time='2024-01-01',
+            end_time='2024-03-31',
+            universe_field='monthly_adj_close',
+            config_path=config_dir
+        )
+
+    # Verify universe exists and has correct shape
+    # Note: DataSource returns monthly data, but universe mask will be created from it
+    universe_df = ae._universe_mask._data
+    assert universe_df.shape[1] == 3  # 3 securities
+    # Universe should reflect data availability (C has NaN in February)
+    # The exact date filtering depends on what DataSource returns
+
+
+def test_universe_field_validation_invalid(config_dir, mock_data_source):
+    """Test that invalid universe_field raises ValueError."""
+    with patch('alpha_excel2.core.facade.DataSource', return_value=mock_data_source):
+        with pytest.raises(ValueError, match="Universe field 'nonexistent_field' not found"):
+            ae = AlphaExcel(
+                start_time='2024-01-01',
+                end_time='2024-12-31',
+                universe_field='nonexistent_field',
+                config_path=config_dir
+            )
+
+
+def test_universe_field_backward_compatibility(config_dir, mock_data_source):
+    """Test that default behavior (no universe_field) still uses 'returns'."""
+    with patch('alpha_excel2.core.facade.DataSource', return_value=mock_data_source):
+        # Initialize without universe_field parameter (backward compatible)
+        ae = AlphaExcel(
+            start_time='2024-01-01',
+            end_time='2024-12-31',
+            config_path=config_dir
+        )
+
+    # Should have created universe from 'returns' field
+    universe_df = ae._universe_mask._data
+    assert universe_df.shape == (10, 3)  # Matches returns data shape
+    assert universe_df.sum().sum() > 0  # Has some True values

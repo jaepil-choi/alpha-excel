@@ -330,6 +330,54 @@ System-wide settings like `buffer_days` for loading extra data to warm up rollin
 1. `FieldLoader.load()` - After loading field from DataSource
 2. `BaseOperator.__call__()` - After compute() returns result
 
+**Flexible Universe Initialization (NEW in v2.0):**
+- AlphaExcel supports using **any field** from `data.yaml` to define the universe (default: 'returns')
+- Works with both daily and monthly fields (monthly fields are forward-filled automatically)
+- Fail-fast validation ensures the specified field exists in config
+- Backward compatible: defaults to 'returns' if `universe_field` not specified
+
+**Universe Initialization Patterns:**
+
+```python
+# 1. Default: Use 'returns' field (backward compatible)
+ae = AlphaExcel(start_time='2020-01-01', end_time='2023-12-31')
+
+# 2. Use daily adjusted close prices for universe
+ae = AlphaExcel(
+    start_time='2020-01-01',
+    end_time='2023-12-31',
+    universe_field='fnguide_adj_close'
+)
+
+# 3. Use monthly fundamental data (automatically forward-filled)
+ae = AlphaExcel(
+    start_time='2020-01-01',
+    end_time='2023-12-31',
+    universe_field='monthly_market_cap'
+)
+
+# 4. Explicit universe DataFrame (bypasses field loading)
+custom_universe = pd.DataFrame(...)  # Boolean DataFrame
+ae = AlphaExcel(
+    start_time='2020-01-01',
+    end_time='2023-12-31',
+    universe=custom_universe
+)
+```
+
+**How It Works:**
+1. Field name is validated against `config/data.yaml` during initialization
+2. Field is loaded with buffer for warmup (e.g., 252 days)
+3. Universe mask derived as `~field_data.isna()`
+4. Monthly fields are forward-filled based on `preprocessing.yaml` settings
+5. Mask is filtered to requested date range
+
+**Key Benefits:**
+- **Flexibility**: Choose any field to define universe (prices, fundamentals, etc.)
+- **Frequency Support**: Works seamlessly with daily, monthly, or any frequency
+- **Validation**: ValueError raised immediately if field doesn't exist
+- **Config-Driven**: All field settings come from `data.yaml`
+
 **Dynamic Universe Filtering (NEW in v2.0):**
 - Universe can be changed after initialization using `ae.set_universe(alpha_data)`
 - New universe must be a **strict subset** of original (can only shrink, never expand)

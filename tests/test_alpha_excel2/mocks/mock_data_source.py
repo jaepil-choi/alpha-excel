@@ -32,13 +32,15 @@ class MockDataSource:
 
         self._mock_data[field_name] = data.copy()
 
-    def load_field(self, field_name: str, start_time=None, end_time=None) -> pd.DataFrame:
+    def load_field(self, field_name: str, start_date=None, end_date=None, start_time=None, end_time=None) -> pd.DataFrame:
         """Load mock data (mimics DataSource interface).
 
         Args:
             field_name: Name of the field to load
-            start_time: Optional start date for filtering
-            end_time: Optional end date for filtering
+            start_date: Optional start date string for filtering (DataSource interface)
+            end_date: Optional end date string for filtering (DataSource interface)
+            start_time: Optional start date for filtering (legacy parameter)
+            end_time: Optional end date for filtering (legacy parameter)
 
         Returns:
             DataFrame with DatetimeIndex and columns for securities
@@ -51,14 +53,18 @@ class MockDataSource:
 
         data = self._mock_data[field_name].copy()
 
-        # Apply date filtering if requested
-        if start_time is not None:
-            start_time = pd.Timestamp(start_time)
-            data = data[data.index >= start_time]
+        # Support both start_date/end_date (real DataSource) and start_time/end_time (legacy)
+        start = start_date if start_date is not None else start_time
+        end = end_date if end_date is not None else end_time
 
-        if end_time is not None:
-            end_time = pd.Timestamp(end_time)
-            data = data[data.index <= end_time]
+        # Apply date filtering if requested
+        if start is not None:
+            start = pd.Timestamp(start)
+            data = data[data.index >= start]
+
+        if end is not None:
+            end = pd.Timestamp(end)
+            data = data[data.index <= end]
 
         return data
 

@@ -573,7 +573,7 @@ class AlphaExcel:
     Components don't depend on AlphaExcel - only on specific dependencies.
     """
 
-    def __init__(self, start_time, end_time, universe=None, config_path='config'):
+    def __init__(self, start_time, end_time, universe=None, universe_field=None, config_path='config'):
         # 1. Timestamps
         self._start_time = pd.Timestamp(start_time)
         self._end_time = pd.Timestamp(end_time)
@@ -585,7 +585,7 @@ class AlphaExcel:
         self._data_source = DataSource(config_path)
 
         # 4. UniverseMask (before others need it)
-        self._universe_mask = self._initialize_universe(universe)
+        self._universe_mask = self._initialize_universe(universe, universe_field)
 
         # 5. FieldLoader (inject dependencies explicitly)
         self._field_loader = FieldLoader(
@@ -643,6 +643,137 @@ def to_short_returns(self, weights: AlphaData) -> AlphaData:
     """Short positions returns only."""
     ...
 ```
+
+#### Flexible Universe Initialization (universe_field)
+
+**NEW in v2.0**: AlphaExcel supports flexible universe initialization using any field from `data.yaml` instead of hardcoding 'returns'.
+
+**Design Philosophy:**
+- **Field-Agnostic Universe**: Use any field to define the trading universe (default: 'returns')
+- **Frequency Support**: Works with both daily and monthly fields (with forward_fill)
+- **Backward Compatible**: Defaults to 'returns' if `universe_field` not specified
+- **Validation**: Fail-fast if specified field doesn't exist in data.yaml
+
+**API:**
+
+```python
+def __init__(self, start_time, end_time, universe=None, universe_field=None, config_path='config'):
+    """
+    Initialize AlphaExcel with flexible universe field selection.
+
+    Args:
+        start_time: Start date for backtesting period
+        end_time: End date for backtesting period
+        universe: Optional pre-computed universe mask (pd.DataFrame)
+        universe_field: Field name to use for universe derivation (default: 'returns')
+            - Must exist in config/data.yaml
+            - Works with any frequency (daily, monthly with forward_fill, etc.)
+            - Universe mask = ~field_data.isna()
+        config_path: Path to config directory
+
+    Examples:
+        # Default: Use 'returns' field
+        ae = AlphaExcel(start_time='2020-01-01', end_time='2023-12-31')
+
+        # Use daily adjusted close prices
+        ae = AlphaExcel(
+            start_time='2020-01-01',
+            end_time='2023-12-31',
+            universe_field='fnguide_adj_close'
+        )
+
+        # Use monthly data (automatically forward-filled to daily)
+        ae = AlphaExcel(
+            start_time='2020-01-01',
+            end_time='2023-12-31',
+            universe_field='monthly_adj_close'
+        )
+    """
+```
+
+**Implementation Details:**
+
+```python
+def _initialize_universe(self, universe: Optional[pd.DataFrame], universe_field: Optional[str]) -> UniverseMask:
+    """
+    Initialize universe mask from explicit DataFrame or field name.
+
+    Process:
+    1. If universe provided: Use directly
+    2. Otherwise: Load field specified by universe_field (default: 'returns')
+    3. Validate field exists in data.yaml
+    4. Load field with buffer for warmup
+    5. Derive universe mask: ~field_data.isna()
+    6. Filter to requested date range
+    """
+    if universe is None:
+        field_name = universe_field if universe_field is not None else 'returns'
+        self._validate_universe_field(field_name)
+        field_data = self._load_universe_field(field_name)
+        universe_mask = ~field_data.isna()
+        # Filter to date range...
+    else:
+        # Use provided universe
+        ...
+
+def _validate_universe_field(self, field_name: str):
+    """Validate that universe field exists in data.yaml."""
+    try:
+        _ = self._config_manager.get_field_config(field_name)
+    except KeyError:
+        raise ValueError(
+            f"Universe field '{field_name}' not found in data.yaml. "
+            f"Please choose a valid field from config/data.yaml"
+        )
+
+def _load_universe_field(self, field_name: str) -> pd.DataFrame:
+    """Load specified field with buffer for universe creation."""
+    buffer_days = self._config_manager.get_setting('data_loading.buffer_days', default=252)
+    buffered_start = self._start_time - pd.Timedelta(days=int(buffer_days * 1.5))
+
+    field_df = self._data_source.load_field(
+        field_name,
+        start_date=buffered_start.strftime('%Y-%m-%d'),
+        end_date=self._end_time.strftime('%Y-%m-%d')
+    )
+    return field_df
+```
+
+**Use Cases:**
+
+1. **Daily Price Data**: Use adjusted close prices for more comprehensive universe
+   ```python
+   ae = AlphaExcel(
+       start_time='2020-01-01',
+       end_time='2023-12-31',
+       universe_field='fnguide_adj_close'
+   )
+   ```
+
+2. **Monthly Fundamental Data**: Use monthly fields that forward-fill to daily
+   ```python
+   ae = AlphaExcel(
+       start_time='2020-01-01',
+       end_time='2023-12-31',
+       universe_field='monthly_market_cap'
+   )
+   ```
+
+3. **Backward Compatibility**: Default behavior unchanged
+   ```python
+   ae = AlphaExcel(start_time='2020-01-01', end_time='2023-12-31')
+   # Equivalent to universe_field='returns'
+   ```
+
+**Key Design Decisions:**
+
+1. **Fail-Fast Validation**: ValueError raised during initialization if field doesn't exist
+2. **Config-Driven**: Field must be registered in data.yaml (no ad-hoc field names)
+3. **Frequency-Agnostic**: Works with any field frequency (daily, monthly, etc.)
+4. **Forward-Fill Support**: Monthly fields automatically forward-filled based on preprocessing.yaml
+5. **Explicit Over Implicit**: User specifies field name rather than auto-detecting "best" field
+
+---
 
 #### Dynamic Universe Filtering (set_universe)
 
