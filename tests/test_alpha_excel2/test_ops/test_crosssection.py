@@ -165,11 +165,15 @@ class TestRank:
         op = Rank(universe_mask, config_manager)
         result = op(alpha_data)
 
-        # Verify step history
-        assert len(result._step_history) == 1
-        assert result._step_history[0]['step'] == 1
-        assert 'Rank' in result._step_history[0]['expr']
-        assert result._step_history[0]['op'] == 'Rank'
+        # Verify step history - now inherits from input + appends new step
+        assert len(result._step_history) == 2
+        # First step inherited
+        assert result._step_history[0]['step'] == 0
+        assert result._step_history[0]['expr'] == 'Field(returns)'
+        # Second step is new operation
+        assert result._step_history[1]['step'] == 1
+        assert 'Rank' in result._step_history[1]['expr']
+        assert result._step_history[1]['op'] == 'Rank'
 
     def test_rank_all_equal(self, dates, securities, universe_mask, config_manager):
         """Test ranking when all values are equal."""

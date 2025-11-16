@@ -106,9 +106,10 @@ def test_does_not_discover_base_operator(registry):
 def test_tracks_correct_category_for_each_operator(registry):
     """Test that each operator has the correct category."""
     # Check that all operators have a category
+    valid_categories = ['timeseries', 'crosssection', 'group', 'arithmetic', 'conditional', 'logical']
     for op_name in registry._operators:
         assert op_name in registry._operator_categories
-        assert registry._operator_categories[op_name] in ['timeseries', 'crosssection', 'group']
+        assert registry._operator_categories[op_name] in valid_categories
 
 
 # ===========================

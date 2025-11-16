@@ -189,12 +189,16 @@ TsMean:
         op = TsMean(universe_mask, config_manager)
         result = op(alpha_data, window=5)
 
-        # Verify step history
-        assert len(result._step_history) == 1
-        assert result._step_history[0]['step'] == 1
-        assert 'TsMean' in result._step_history[0]['expr']
-        assert 'window=5' in result._step_history[0]['expr']
-        assert result._step_history[0]['op'] == 'TsMean'
+        # Verify step history - now inherits from input + appends new step
+        assert len(result._step_history) == 2
+        # First step inherited
+        assert result._step_history[0]['step'] == 0
+        assert result._step_history[0]['expr'] == 'Field(returns)'
+        # Second step is new operation
+        assert result._step_history[1]['step'] == 1
+        assert 'TsMean' in result._step_history[1]['expr']
+        assert 'window=5' in result._step_history[1]['expr']
+        assert result._step_history[1]['op'] == 'TsMean'
 
     def test_ts_mean_invalid_window_zero(self, sample_data, universe_mask, config_manager):
         """Test that window=0 raises ValueError."""
