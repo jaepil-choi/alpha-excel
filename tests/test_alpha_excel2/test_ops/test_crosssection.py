@@ -3,7 +3,7 @@
 import pytest
 import pandas as pd
 import numpy as np
-from alpha_excel2.ops.crosssection import Rank, Demean, Zscore
+from alpha_excel2.ops.crosssection import Rank, Demean, Zscore, Scale
 from alpha_excel2.core.alpha_data import AlphaData
 from alpha_excel2.core.universe_mask import UniverseMask
 from alpha_excel2.core.config_manager import ConfigManager

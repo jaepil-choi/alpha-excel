@@ -152,3 +152,74 @@ class Zscore(BaseOperator):
         zscored = demeaned.div(row_std, axis=0)
 
         return zscored
+
+
+class Scale(BaseOperator):
+    """Cross-sectional weight scaling operator.
+
+    Normalizes positive and negative values separately so that:
+    - Positive values sum to +1.0 (long side)
+    - Negative values sum to -1.0 (short side)
+
+    This is essential for portfolio construction, converting signals to weights
+    with controlled total leverage. For a long-short portfolio, the result has
+    gross exposure of 2.0 (1.0 long + 1.0 short) and net exposure of 0.0.
+
+    Example:
+        # Convert signal to portfolio weights
+        weights = o.scale(signal)
+        # Long positions sum to +1, short positions sum to -1
+
+        # For long-only portfolio (all positive signals)
+        long_weights = o.scale(positive_signal)
+        # All weights sum to +1
+
+    Note:
+        - Zero values remain zero
+        - NaN values remain NaN in output
+        - Works for long-only, short-only, and long-short portfolios
+        - Each time period is scaled independently
+    """
+
+    input_types = ['numeric']
+    output_type = 'weight'  # Output is portfolio weights
+    prefer_numpy = False  # Use pandas operations
+
+    def compute(self, data: pd.DataFrame, **params) -> pd.DataFrame:
+        """Scale positive and negative values separately.
+
+        Args:
+            data: Input DataFrame (T, N) with time on rows, assets on columns
+            **params: Additional parameters (currently unused)
+
+        Returns:
+            DataFrame with scaled weights
+
+        Note:
+            For each row (time point):
+            - Positive values are divided by their sum (scale to +1)
+            - Negative values are divided by abs(sum) (scale to -1)
+            - Zero and NaN values are preserved
+        """
+        result = data.copy()
+
+        for idx in data.index:
+            row = data.loc[idx]
+
+            # Separate positive and negative
+            positive_mask = row > 0
+            negative_mask = row < 0
+
+            # Calculate sums (skipna=True by default)
+            pos_sum = row[positive_mask].sum()
+            neg_sum = row[negative_mask].sum()
+
+            # Scale positive values to sum to +1
+            if pos_sum > 0:
+                result.loc[idx, positive_mask] = row[positive_mask] / pos_sum
+
+            # Scale negative values to sum to -1
+            if neg_sum < 0:
+                result.loc[idx, negative_mask] = row[negative_mask] / abs(neg_sum)
+
+        return result

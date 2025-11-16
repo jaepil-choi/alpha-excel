@@ -931,3 +931,79 @@ class TsCovariance(BaseOperator):
             ).cov(right_series)
 
         return result
+
+
+class TsZscore(BaseOperator):
+    """Rolling time-series z-score normalization operator.
+
+    Computes rolling z-score: (X - rolling_mean) / rolling_std.
+    Normalizes each time series to have mean~0 and std~1 over the rolling window.
+
+    This is useful for:
+    - Detecting outliers in time series
+    - Removing trends and focusing on deviations
+    - Normalizing signals with different scales
+    - Comparing volatility-adjusted signals
+
+    Example:
+        # 20-day rolling z-score
+        zscore = o.ts_zscore(returns, window=20)
+
+        # Detect outliers (|z-score| > 2)
+        is_outlier = zscore.abs() > 2
+
+        # Normalize momentum signal
+        normalized_mom = o.ts_zscore(momentum, window=60)
+
+    Note:
+        - This operator demonstrates the composition pattern
+        - In Phase 3, this will use OperatorRegistry to call TsMean and TsStdDev
+        - For now, we use direct computation for efficiency
+        - min_periods_ratio uses TsMean's default (0.5)
+
+    Config:
+        min_periods_ratio (float): Minimum fraction of window required.
+            Uses TsMean's default of 0.5 (less conservative than TsStdDev's 0.7).
+    """
+
+    input_types = ['numeric']
+    output_type = 'numeric'
+    prefer_numpy = False  # Use pandas rolling
+
+    def compute(self, data: pd.DataFrame, window: int) -> pd.DataFrame:
+        """Compute rolling z-score.
+
+        Args:
+            data: Input DataFrame (T, N)
+            window: Rolling window size
+
+        Returns:
+            DataFrame with rolling z-scores
+
+        Formula:
+            z-score[t] = (X[t] - mean(X[t-window+1:t])) / std(X[t-window+1:t])
+
+        Note:
+            Uses same min_periods_ratio as TsMean (0.5).
+            This is less conservative than TsStdDev (0.7) but appropriate
+            for z-score normalization where we want earlier signals.
+        """
+        if not isinstance(window, int) or window < 1:
+            raise ValueError(f"window must be a positive integer, got {window}")
+
+        # Get min_periods_ratio from config (default 0.5 - same as TsMean)
+        try:
+            operator_config = self._config_manager.get_operator_config('TsZscore')
+            min_periods_ratio = operator_config.get('min_periods_ratio', 0.5)
+        except KeyError:
+            min_periods_ratio = 0.5
+
+        # Calculate min_periods
+        min_periods = max(1, int(window * min_periods_ratio))
+
+        # Compute rolling mean and std
+        ts_mean = data.rolling(window=window, min_periods=min_periods).mean()
+        ts_std = data.rolling(window=window, min_periods=min_periods).std()
+
+        # Z-score: (X - mean) / std
+        return (data - ts_mean) / ts_std
