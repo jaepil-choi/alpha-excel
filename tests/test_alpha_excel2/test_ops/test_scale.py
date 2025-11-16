@@ -77,10 +77,10 @@ class TestScale:
         alpha_data = AlphaData(sample_data_long_only, data_type=DataType.NUMERIC)
 
         op = Scale(universe_mask, config_manager)
-        result = op(alpha_data)
+        result = op(alpha_data, short=0)  # Long-only: short=0
 
         # Check output type
-        assert result._data_type == DataType.WEIGHT
+        assert result._data_type == DataType.NUMERIC
 
         # Sum of positive should be 1.0
         pos_sum = result._data.iloc[0].sum()
@@ -97,7 +97,7 @@ class TestScale:
         alpha_data = AlphaData(sample_data_short_only, data_type=DataType.NUMERIC)
 
         op = Scale(universe_mask, config_manager)
-        result = op(alpha_data)
+        result = op(alpha_data, long=0)  # Short-only: long=0
 
         # Sum of negative should be -1.0
         neg_sum = result._data.iloc[0].sum()
@@ -223,7 +223,7 @@ class TestScale:
 
         alpha_data = AlphaData(data, data_type=DataType.NUMERIC)
         op = Scale(universe_mask, config_manager)
-        result = op(alpha_data)
+        result = op(alpha_data, short=0)  # Long-only: short=0
 
         # All should be equal weight = 1/4 = 0.25
         assert result._data.iloc[0, 0] == pytest.approx(0.25)
@@ -246,7 +246,7 @@ class TestScale:
         alpha_data = AlphaData(data, data_type=DataType.NUMERIC)
 
         op = Scale(universe_mask, config_manager)
-        result = op(alpha_data)
+        result = op(alpha_data, short=0)  # Long-only: short=0
 
         # Universe mask excludes GOOGL on 2024-01-03 (row 2, col 1)
         assert pd.isna(result._data.iloc[2, 1])
@@ -260,7 +260,7 @@ class TestScale:
         alpha_data = AlphaData(sample_data_long_only, data_type=DataType.NUMERIC, step_counter=0)
 
         op = Scale(universe_mask, config_manager)
-        result = op(alpha_data)
+        result = op(alpha_data, short=0)  # Long-only: short=0
 
         assert result._step_counter == 1
 
@@ -276,7 +276,7 @@ class TestScale:
         )
 
         op = Scale(universe_mask, config_manager)
-        result = op(alpha_data, record_output=True)
+        result = op(alpha_data, short=0, record_output=True)  # Long-only: short=0
 
         # Result should be cached and have inherited cache
         assert result._cached == True
