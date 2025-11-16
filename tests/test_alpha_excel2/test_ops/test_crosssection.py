@@ -66,7 +66,8 @@ class TestRank:
         assert isinstance(result, AlphaData)
         assert result._data_type == DataType.NUMERIC
         assert result._step_counter == 1
-        assert result._data.shape == sample_data.shape
+        # Result shape matches universe_mask (10 rows), not sample_data (5 rows)
+        assert result._data.shape == (10, 3)
 
         # Verify first row: [1.0, 2.0, 3.0] → ranks [1/3, 2/3, 3/3]
         # pandas pct=True uses rank/n formula
@@ -210,8 +211,9 @@ class TestRank:
         op = Rank(universe_mask_single, config_manager)
         result = op(alpha_data)
 
+        # Result shape matches universe_mask (10 rows), not data (3 rows)
+        assert result._data.shape == (10, 1)
         # Single asset gets rank 1.0 (only position, rank=1, pct=1/1=1.0)
-        assert result._data.shape == data.shape
         assert result._data.iloc[0, 0] == pytest.approx(1.0)
         assert result._data.iloc[1, 0] == pytest.approx(1.0)
         assert result._data.iloc[2, 0] == pytest.approx(1.0)

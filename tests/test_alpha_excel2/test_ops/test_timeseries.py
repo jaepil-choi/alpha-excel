@@ -236,8 +236,8 @@ TsMean:
         result = op(alpha_data, window=10)
 
         # With window=10, min_periods=5 (50%)
-        # Last row can compute (5 valid values)
-        assert not pd.isna(result._data.iloc[-1, 0])
+        # Last row of INPUT data (row 4) can compute (5 valid values)
+        assert not pd.isna(result._data.iloc[4, 0])
         # First few rows can't compute (not enough data)
         assert pd.isna(result._data.iloc[0, 0])
 
@@ -332,10 +332,10 @@ class TestTsCountNans:
         result = op(alpha_data, window=3)
 
         # All values should be 0 (no NaNs in any window)
-        # Skip first rows that might be NaN due to min_periods
-        assert result._data.iloc[-1, 0] == pytest.approx(0.0)
-        assert result._data.iloc[-1, 1] == pytest.approx(0.0)
-        assert result._data.iloc[-1, 2] == pytest.approx(0.0)
+        # Check last row of INPUT data (row 4), not last row of result
+        assert result._data.iloc[4, 0] == pytest.approx(0.0)
+        assert result._data.iloc[4, 1] == pytest.approx(0.0)
+        assert result._data.iloc[4, 2] == pytest.approx(0.0)
 
     def test_count_nans_all_nans(self, dates, securities, universe_mask, config_manager):
         """Test counting when all values are NaN."""
