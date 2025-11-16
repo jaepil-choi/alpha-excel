@@ -158,68 +158,101 @@ class Scale(BaseOperator):
     """Cross-sectional weight scaling operator.
 
     Normalizes positive and negative values separately so that:
-    - Positive values sum to +1.0 (long side)
-    - Negative values sum to -1.0 (short side)
+    - Positive values sum to specified long target (default: +1.0)
+    - Negative values sum to specified short target (default: -1.0)
 
     This is essential for portfolio construction, converting signals to weights
-    with controlled total leverage. For a long-short portfolio, the result has
-    gross exposure of 2.0 (1.0 long + 1.0 short) and net exposure of 0.0.
+    with controlled total leverage. For a long-short portfolio with defaults,
+    the result has gross exposure of 2.0 (1.0 long + 1.0 short) and net exposure of 0.0.
 
     Example:
-        # Convert signal to portfolio weights
+        # Convert signal to portfolio weights (long=1, short=-1)
         weights = o.scale(signal)
         # Long positions sum to +1, short positions sum to -1
 
-        # For long-only portfolio (all positive signals)
-        long_weights = o.scale(positive_signal)
+        # Long-only portfolio (only positive values, short=0)
+        long_weights = o.scale(positive_signal, short=0)
         # All weights sum to +1
+
+        # Custom leverage
+        high_leverage = o.scale(signal, long=2, short=-2)
+        # Long positions sum to +2, short positions sum to -2
+
+    Args:
+        long: Target sum for positive values (default: 1.0)
+        short: Target sum for negative values (default: -1.0)
+
+    Raises:
+        ValueError: If a row has only positive values but short != 0, or
+                   only negative values but long != 0
 
     Note:
         - Zero values remain zero
         - NaN values remain NaN in output
-        - Works for long-only, short-only, and long-short portfolios
         - Each time period is scaled independently
     """
 
     input_types = ['numeric']
-    output_type = 'weight'  # Output is portfolio weights
+    output_type = 'numeric'  # Output is still numeric (scaled values)
     prefer_numpy = False  # Use pandas operations
 
-    def compute(self, data: pd.DataFrame, **params) -> pd.DataFrame:
+    def compute(self, data: pd.DataFrame, long: float = 1.0, short: float = -1.0) -> pd.DataFrame:
         """Scale positive and negative values separately.
 
         Args:
             data: Input DataFrame (T, N) with time on rows, assets on columns
-            **params: Additional parameters (currently unused)
+            long: Target sum for positive values (default: 1.0)
+            short: Target sum for negative values (default: -1.0)
 
         Returns:
-            DataFrame with scaled weights
+            DataFrame with scaled values
+
+        Raises:
+            ValueError: If scaling constraints cannot be satisfied
 
         Note:
             For each row (time point):
-            - Positive values are divided by their sum (scale to +1)
-            - Negative values are divided by abs(sum) (scale to -1)
+            - Positive values are scaled to sum to `long`
+            - Negative values are scaled to sum to `short`
             - Zero and NaN values are preserved
+            - Raises error if row has only positives but short != 0
+            - Raises error if row has only negatives but long != 0
         """
         result = data.copy()
 
         for idx in data.index:
             row = data.loc[idx]
 
-            # Separate positive and negative
+            # Separate positive and negative (excluding NaN)
             positive_mask = row > 0
             negative_mask = row < 0
 
+            has_positive = positive_mask.any()
+            has_negative = negative_mask.any()
+
+            # Validation: check if scaling is possible
+            if has_positive and not has_negative and short != 0:
+                raise ValueError(
+                    f"Row {idx} has only positive values but short={short} (expected 0). "
+                    f"Cannot scale negative side when no negative values exist."
+                )
+
+            if has_negative and not has_positive and long != 0:
+                raise ValueError(
+                    f"Row {idx} has only negative values but long={long} (expected 0). "
+                    f"Cannot scale positive side when no positive values exist."
+                )
+
             # Calculate sums (skipna=True by default)
-            pos_sum = row[positive_mask].sum()
-            neg_sum = row[negative_mask].sum()
+            pos_sum = row[positive_mask].sum() if has_positive else 0
+            neg_sum = row[negative_mask].sum() if has_negative else 0
 
-            # Scale positive values to sum to +1
-            if pos_sum > 0:
-                result.loc[idx, positive_mask] = row[positive_mask] / pos_sum
+            # Scale positive values to sum to `long`
+            if has_positive and pos_sum > 0:
+                result.loc[idx, positive_mask] = row[positive_mask] / pos_sum * long
 
-            # Scale negative values to sum to -1
-            if neg_sum < 0:
-                result.loc[idx, negative_mask] = row[negative_mask] / abs(neg_sum)
+            # Scale negative values to sum to `short`
+            if has_negative and neg_sum < 0:
+                result.loc[idx, negative_mask] = row[negative_mask] / abs(neg_sum) * abs(short)
 
         return result
