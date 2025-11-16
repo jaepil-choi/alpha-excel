@@ -6,6 +6,7 @@ All operators accept NUMTYPE inputs (NUMERIC, WEIGHT, PORT_RETURN) and return NU
 """
 
 import pandas as pd
+import numpy as np
 from .base import BaseOperator
 from ..core.types import DataType
 
@@ -188,3 +189,89 @@ class Abs(BaseOperator):
             DataFrame with absolute values
         """
         return data.abs()
+
+
+class Log(BaseOperator):
+    """Natural logarithm operator: ln(A)
+
+    Computes the natural logarithm (base e) of all elements.
+
+    Common use cases:
+    - Price data -> log prices for log-returns calculation
+    - Normalizing right-skewed distributions (e.g., market cap, volume)
+    - Converting multiplicative processes to additive
+
+    Edge cases:
+    - log(x) where x > 1 -> positive
+    - log(x) where 0 < x < 1 -> negative
+    - log(0) -> -inf
+    - log(negative) -> NaN (with RuntimeWarning)
+    - NaN positions preserved
+
+    Input types: [NUMTYPE]
+    Output type: NUMERIC
+
+    Note:
+        User is responsible for ensuring valid input domain (x > 0).
+        No special handling for zeros or negative values - follows numpy behavior.
+    """
+
+    input_types = [DataType.NUMTYPE]
+    output_type = DataType.NUMERIC
+    prefer_numpy = True  # Use numpy for log computation
+
+    def compute(self, data: pd.DataFrame) -> pd.DataFrame:
+        """Compute natural logarithm of all elements.
+
+        Args:
+            data: Numeric DataFrame (should contain x > 0 for valid results)
+
+        Returns:
+            DataFrame with natural logarithm of each element
+
+        Note:
+            - log(0) returns -inf
+            - log(negative) returns NaN and issues RuntimeWarning
+            - NaN values remain NaN
+        """
+        return np.log(data)
+
+
+class Sign(BaseOperator):
+    """Sign extraction operator: sign(A)
+
+    Returns the sign of each element:
+    - +1 for positive values
+    - -1 for negative values
+    - 0 for zero
+    - NaN for NaN
+
+    Common use cases:
+    - Extract direction of signal (long/short)
+    - Combine with other operators for conditional logic
+    - Building binary long-short portfolios
+
+    Input types: [NUMTYPE]
+    Output type: NUMERIC
+    """
+
+    input_types = [DataType.NUMTYPE]
+    output_type = DataType.NUMERIC
+    prefer_numpy = True  # Use numpy for sign computation
+
+    def compute(self, data: pd.DataFrame) -> pd.DataFrame:
+        """Extract sign of all elements.
+
+        Args:
+            data: Numeric DataFrame
+
+        Returns:
+            DataFrame with signs: +1, -1, 0, or NaN
+
+        Note:
+            - Positive values -> +1
+            - Negative values -> -1
+            - Zero -> 0
+            - NaN -> NaN (preserved)
+        """
+        return np.sign(data)
