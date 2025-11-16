@@ -50,7 +50,7 @@ class TestUniverseMask:
         universe = UniverseMask(full_universe_mask)
 
         assert universe._data.equals(full_universe_mask)
-        assert universe._data_type == DataType.MASK
+        assert universe._data_type == DataType.BOOLEAN
         assert universe._data.shape == (5, 3)
 
     def test_initialization_converts_to_bool(self):
@@ -143,14 +143,16 @@ class TestUniverseMask:
             'TSLA': [10, 20, 30, 40, 50]  # TSLA not in universe
         }, index=dates)
 
-        # Should still work (pandas aligns automatically)
+        # Should still work - reindexes to universe columns
         masked = universe.apply_mask(data)
 
         # AAPL should be masked according to universe
         assert not pd.isna(masked.loc['2024-01-01', 'AAPL'])
 
-        # TSLA should be all NaN (not in universe mask)
-        assert pd.isna(masked.loc[:, 'TSLA']).all()
+        # TSLA should not be in masked data (reindexed to universe columns)
+        assert 'TSLA' not in masked.columns
+        # Should only have universe columns
+        assert list(masked.columns) == list(partial_universe_mask.columns)
 
     def test_is_in_universe(self, partial_universe_mask):
         """Test is_in_universe checks specific (time, security) pairs."""

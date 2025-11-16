@@ -13,19 +13,17 @@ class TestDataType:
         assert DataType.GROUP == 'group'
         assert DataType.WEIGHT == 'weight'
         assert DataType.PORT_RETURN == 'port_return'
-        assert DataType.MASK == 'mask'
         assert DataType.BOOLEAN == 'boolean'
         assert DataType.OBJECT == 'object'
 
     def test_all_types(self):
         """Test that all_types() returns all type constants."""
         all_types = DataType.all_types()
-        assert len(all_types) == 7
+        assert len(all_types) == 6
         assert DataType.NUMERIC in all_types
         assert DataType.GROUP in all_types
         assert DataType.WEIGHT in all_types
         assert DataType.PORT_RETURN in all_types
-        assert DataType.MASK in all_types
         assert DataType.BOOLEAN in all_types
         assert DataType.OBJECT in all_types
 

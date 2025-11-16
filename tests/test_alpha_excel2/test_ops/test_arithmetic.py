@@ -7,13 +7,15 @@ Tests all arithmetic operators with type validation.
 import pytest
 import pandas as pd
 import numpy as np
+import tempfile
+from pathlib import Path
 
 from src.alpha_excel2.core.alpha_data import AlphaData
 from src.alpha_excel2.core.types import DataType
 from src.alpha_excel2.core.universe_mask import UniverseMask
 from src.alpha_excel2.core.config_manager import ConfigManager
 from src.alpha_excel2.ops.arithmetic import (
-    Add, Subtract, Multiply, Divide, Power, Negate, Abs
+    Add, Subtract, Multiply, Divide, Power, Negate, Abs, Log, Sign
 )
 
 
@@ -376,3 +378,229 @@ def test_arithmetic_step_history(config_manager, universe_mask, numeric_data1, n
     assert result._step_history[2]['op'] == 'Add'
     assert 'Field(A)' in result._step_history[2]['expr']
     assert 'Field(B)' in result._step_history[2]['expr']
+
+
+# ==============================================================================
+# Log Operator Tests
+# ==============================================================================
+
+
+def test_log_basic():
+    """Test Log operator on positive values."""
+    dates = pd.date_range('2024-01-01', periods=3)
+    securities = ['AAPL', 'GOOGL', 'MSFT']
+
+    # Create data with known log values
+    data = pd.DataFrame(
+        [[1.0, np.e, 10.0],
+         [np.e**2, np.e**3, 100.0],
+         [0.5, 0.1, 0.01]],
+        index=dates,
+        columns=securities
+    )
+    alpha_data = AlphaData(data, data_type=DataType.NUMERIC)
+
+    # Create minimal config
+    with tempfile.TemporaryDirectory() as tmp_path:
+        for fname in ['data.yaml', 'settings.yaml', 'preprocessing.yaml', 'operators.yaml']:
+            (Path(tmp_path) / fname).write_text('{}')
+        config_manager = ConfigManager(tmp_path)
+
+        # Create universe mask
+        mask = pd.DataFrame(True, index=dates, columns=securities)
+        universe_mask = UniverseMask(mask)
+
+        # Apply Log operator
+        log_op = Log(universe_mask, config_manager)
+        result = log_op(alpha_data)
+
+    # Verify structure
+    assert isinstance(result, AlphaData)
+    assert result._data_type == DataType.NUMERIC
+    assert result._step_counter == 1
+
+    # Verify values
+    assert result._data.iloc[0, 0] == pytest.approx(0.0)  # log(1) = 0
+    assert result._data.iloc[0, 1] == pytest.approx(1.0)  # log(e) = 1
+    assert result._data.iloc[0, 2] == pytest.approx(2.302585)  # log(10)
+    assert result._data.iloc[1, 0] == pytest.approx(2.0)  # log(e^2) = 2
+    assert result._data.iloc[1, 1] == pytest.approx(3.0)  # log(e^3) = 3
+    assert result._data.iloc[2, 0] == pytest.approx(-0.693147)  # log(0.5) < 0
+    assert result._data.iloc[2, 1] == pytest.approx(-2.302585)  # log(0.1) < 0
+
+
+def test_log_with_nan():
+    """Test Log operator preserves NaN."""
+    dates = pd.date_range('2024-01-01', periods=2)
+    securities = ['A', 'B', 'C']
+
+    data = pd.DataFrame(
+        [[np.nan, 2.0, 3.0],
+         [1.0, np.nan, 4.0]],
+        index=dates,
+        columns=securities
+    )
+    alpha_data = AlphaData(data, data_type=DataType.NUMERIC)
+
+    with tempfile.TemporaryDirectory() as tmp_path:
+        for fname in ['data.yaml', 'settings.yaml', 'preprocessing.yaml', 'operators.yaml']:
+            (Path(tmp_path) / fname).write_text('{}')
+        config_manager = ConfigManager(tmp_path)
+
+        mask = pd.DataFrame(True, index=dates, columns=securities)
+        universe_mask = UniverseMask(mask)
+
+        log_op = Log(universe_mask, config_manager)
+        result = log_op(alpha_data)
+
+    # Verify NaN preservation
+    assert pd.isna(result._data.iloc[0, 0])
+    assert pd.isna(result._data.iloc[1, 1])
+
+    # Verify other values computed correctly
+    assert result._data.iloc[0, 1] == pytest.approx(np.log(2.0))
+    assert result._data.iloc[1, 0] == pytest.approx(0.0)  # log(1) = 0
+
+
+def test_log_edge_cases():
+    """Test Log operator edge cases (zero, negative)."""
+    dates = pd.date_range('2024-01-01', periods=2)
+    securities = ['A', 'B', 'C']
+
+    data = pd.DataFrame(
+        [[0.0, 1.0, 2.0],
+         [-1.0, -2.0, 3.0]],
+        index=dates,
+        columns=securities
+    )
+    alpha_data = AlphaData(data, data_type=DataType.NUMERIC)
+
+    with tempfile.TemporaryDirectory() as tmp_path:
+        for fname in ['data.yaml', 'settings.yaml', 'preprocessing.yaml', 'operators.yaml']:
+            (Path(tmp_path) / fname).write_text('{}')
+        config_manager = ConfigManager(tmp_path)
+
+        mask = pd.DataFrame(True, index=dates, columns=securities)
+        universe_mask = UniverseMask(mask)
+
+        with pytest.warns(RuntimeWarning):  # Expect warnings for log(0) and log(negative)
+            log_op = Log(universe_mask, config_manager)
+            result = log_op(alpha_data)
+
+    # log(0) = -inf
+    assert result._data.iloc[0, 0] == -np.inf
+
+    # log(negative) = NaN
+    assert pd.isna(result._data.iloc[1, 0])
+    assert pd.isna(result._data.iloc[1, 1])
+
+    # log(positive) works
+    assert result._data.iloc[0, 1] == pytest.approx(0.0)  # log(1) = 0
+    assert result._data.iloc[1, 2] == pytest.approx(np.log(3.0))
+
+
+# ==============================================================================
+# Sign Operator Tests
+# ==============================================================================
+
+
+def test_sign_basic():
+    """Test Sign operator on mixed positive/negative/zero values."""
+    dates = pd.date_range('2024-01-01', periods=3)
+    securities = ['A', 'B', 'C']
+
+    data = pd.DataFrame(
+        [[5.0, -3.0, 0.0],
+         [0.5, -100.0, 1.0],
+         [0.0, 0.0, -0.1]],
+        index=dates,
+        columns=securities
+    )
+    alpha_data = AlphaData(data, data_type=DataType.NUMERIC)
+
+    with tempfile.TemporaryDirectory() as tmp_path:
+        for fname in ['data.yaml', 'settings.yaml', 'preprocessing.yaml', 'operators.yaml']:
+            (Path(tmp_path) / fname).write_text('{}')
+        config_manager = ConfigManager(tmp_path)
+
+        mask = pd.DataFrame(True, index=dates, columns=securities)
+        universe_mask = UniverseMask(mask)
+
+        sign_op = Sign(universe_mask, config_manager)
+        result = sign_op(alpha_data)
+
+    # Verify structure
+    assert isinstance(result, AlphaData)
+    assert result._data_type == DataType.NUMERIC
+    assert result._step_counter == 1
+
+    # Verify signs
+    assert result._data.iloc[0, 0] == 1.0  # sign(5.0) = +1
+    assert result._data.iloc[0, 1] == -1.0  # sign(-3.0) = -1
+    assert result._data.iloc[0, 2] == 0.0  # sign(0.0) = 0
+    assert result._data.iloc[1, 0] == 1.0  # sign(0.5) = +1
+    assert result._data.iloc[1, 1] == -1.0  # sign(-100.0) = -1
+    assert result._data.iloc[2, 2] == -1.0  # sign(-0.1) = -1
+
+
+def test_sign_with_nan():
+    """Test Sign operator preserves NaN."""
+    dates = pd.date_range('2024-01-01', periods=2)
+    securities = ['A', 'B', 'C']
+
+    data = pd.DataFrame(
+        [[np.nan, 2.0, -3.0],
+         [1.0, np.nan, 0.0]],
+        index=dates,
+        columns=securities
+    )
+    alpha_data = AlphaData(data, data_type=DataType.NUMERIC)
+
+    with tempfile.TemporaryDirectory() as tmp_path:
+        for fname in ['data.yaml', 'settings.yaml', 'preprocessing.yaml', 'operators.yaml']:
+            (Path(tmp_path) / fname).write_text('{}')
+        config_manager = ConfigManager(tmp_path)
+
+        mask = pd.DataFrame(True, index=dates, columns=securities)
+        universe_mask = UniverseMask(mask)
+
+        sign_op = Sign(universe_mask, config_manager)
+        result = sign_op(alpha_data)
+
+    # Verify NaN preservation
+    assert pd.isna(result._data.iloc[0, 0])
+    assert pd.isna(result._data.iloc[1, 1])
+
+    # Verify other values
+    assert result._data.iloc[0, 1] == 1.0  # sign(2.0) = +1
+    assert result._data.iloc[0, 2] == -1.0  # sign(-3.0) = -1
+    assert result._data.iloc[1, 0] == 1.0  # sign(1.0) = +1
+    assert result._data.iloc[1, 2] == 0.0  # sign(0.0) = 0
+
+
+def test_sign_all_zero():
+    """Test Sign operator on all zeros."""
+    dates = pd.date_range('2024-01-01', periods=2)
+    securities = ['A', 'B']
+
+    data = pd.DataFrame(
+        [[0.0, 0.0],
+         [0.0, 0.0]],
+        index=dates,
+        columns=securities
+    )
+    alpha_data = AlphaData(data, data_type=DataType.NUMERIC)
+
+    with tempfile.TemporaryDirectory() as tmp_path:
+        for fname in ['data.yaml', 'settings.yaml', 'preprocessing.yaml', 'operators.yaml']:
+            (Path(tmp_path) / fname).write_text('{}')
+        config_manager = ConfigManager(tmp_path)
+
+        mask = pd.DataFrame(True, index=dates, columns=securities)
+        universe_mask = UniverseMask(mask)
+
+        sign_op = Sign(universe_mask, config_manager)
+        result = sign_op(alpha_data)
+
+    # All zeros should remain zeros
+    assert (result._data == 0.0).all().all()

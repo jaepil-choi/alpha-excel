@@ -355,10 +355,15 @@ class TestOperatorBase:
         op = TestAddOperator(universe_mask, config_manager)
         result = op(alpha_data, scalar=5)
 
-        assert len(result._step_history) == 1
-        assert result._step_history[0]['step'] == 1
-        assert 'TestAddOperator' in result._step_history[0]['expr']
-        assert result._step_history[0]['op'] == 'TestAddOperator'
+        # step_history now inherits from input + appends new step
+        assert len(result._step_history) == 2
+        # First step is inherited from input
+        assert result._step_history[0]['step'] == 0
+        assert result._step_history[0]['expr'] == 'Field(returns)'
+        # Second step is the new operation
+        assert result._step_history[1]['step'] == 1
+        assert 'TestAddOperator' in result._step_history[1]['expr']
+        assert result._step_history[1]['op'] == 'TestAddOperator'
 
     def test_idempotent_masking(self, sample_data, universe_mask, config_manager):
         """Test that masking is idempotent (safe to re-mask)."""

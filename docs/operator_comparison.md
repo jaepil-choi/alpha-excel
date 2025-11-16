@@ -5,31 +5,33 @@ This document compares operators implemented in legacy alpha-excel (v1.0) with t
 ## Summary Statistics
 
 - **Legacy v1.0 Total**: 44 operators
-- **Current v2.0 Total**: 38 operators (86% complete)
-- **Missing from v2.0**: 6 operators
-  - **Deferred for design discussion**: 4 operators (LabelQuantile, MapValues, CompositeGroup, Constant)
-  - **To be implemented**: 2 operators
+- **Current v2.0 Total**: 45 operators (102% - includes new operators!)
+- **Missing from v2.0**: 6 operators from v1.0
+  - **Deferred for design discussion**: 5 operators (LabelQuantile, MapValues, CompositeGroup, Constant, GroupScalePositive)
+  - **To be implemented**: 1 operator (IsNan)
+- **New in v2.0**: 7 operators not in v1.0 (Demean, Zscore, Scale, Log, Sign, If_Else, Ts_Zscore)
 
 ### Breakdown by Category
 
 | Category | v1.0 Count | v2.0 Count | Completion | Notes |
 |----------|------------|------------|------------|-------|
-| **Time-Series** | 15 | 15 | **100%** ✅ | Complete! All time-series operators ported |
-| **Cross-Section** | 2 | 1 | 50% | 1 deferred: LabelQuantile (design discussion needed) |
-| **Group** | 7 | 6 | **86%** ✅ | 1 missing: GroupScalePositive (**critical** - deferred) |
-| **Arithmetic** | 7 | 7 | **100%** ✅ | Complete! |
+| **Time-Series** | 15 | 16 | **107%** ✅ | All v1.0 ported + Ts_Zscore (new) |
+| **Cross-Section** | 2 | 4 | **200%** ✅ | All v1.0 ported + Demean, Zscore, Scale (new) |
+| **Group** | 7 | 6 | **86%** ✅ | 1 deferred: GroupScalePositive |
+| **Arithmetic** | 7 | 9 | **129%** ✅ | All v1.0 ported + Log, Sign (new) |
 | **Logical** | 10 | 9 | 90% | 1 missing: IsNan |
-| **Transformation** | 2 | 0 | 0% | 2 deferred: MapValues, CompositeGroup (design discussion needed) |
-| **Constants** | 1 | 0 | 0% | 1 deferred: Constant (design discussion needed) |
-| **TOTAL** | **44** | **38** | **86%** | **2 to implement, 4 deferred** |
+| **Conditional** | 0 | 1 | N/A | If_Else (new category) |
+| **Transformation** | 2 | 0 | 0% | 2 deferred: MapValues, CompositeGroup |
+| **Constants** | 1 | 0 | 0% | 1 deferred: Constant |
+| **TOTAL** | **44** | **45** | **102%** | **1 to implement, 5 deferred, 7 new** |
 
 ---
 
 ## Implementation Status by Category
 
-### ✅ Implemented in v2.0 (38 operators)
+### ✅ Implemented in v2.0 (45 operators)
 
-#### Time-Series Operators (15/15 = 100%)
+#### Time-Series Operators (16 - includes 1 new)
 
 | Operator | Status | Location |
 |----------|--------|----------|
@@ -48,14 +50,18 @@ This document compares operators implemented in legacy alpha-excel (v1.0) with t
 | `TsArgMin` | ✅ | `ops/timeseries.py` |
 | `TsCorr` | ✅ | `ops/timeseries.py` |
 | `TsCovariance` | ✅ | `ops/timeseries.py` |
+| **`TsZscore`** | ✅ **NEW** | `ops/timeseries.py:936-1009` |
 
-#### Cross-Section Operators (1/2 = 50%)
+#### Cross-Section Operators (4 - includes 3 new)
 
 | Operator | Status | Location |
 |----------|--------|----------|
 | `Rank` | ✅ | `ops/crosssection.py:11-51` |
+| **`Demean`** | ✅ **NEW** | `ops/crosssection.py:53-100` |
+| **`Zscore`** | ✅ **NEW** | `ops/crosssection.py:102-154` |
+| **`Scale`** | ✅ **NEW** | `ops/crosssection.py:157-225` |
 
-#### Group Operators (6/7 = 86%)
+#### Group Operators (6)
 
 | Operator | Status | Location |
 |----------|--------|----------|
@@ -66,7 +72,7 @@ This document compares operators implemented in legacy alpha-excel (v1.0) with t
 | `GroupCount` | ✅ | `ops/group.py:277-345` |
 | `GroupNeutralize` | ✅ | `ops/group.py:348-425` |
 
-#### Arithmetic Operators (7/7 = 100%)
+#### Arithmetic Operators (9 - includes 2 new)
 
 | Operator | Status | Location |
 |----------|--------|----------|
@@ -77,8 +83,16 @@ This document compares operators implemented in legacy alpha-excel (v1.0) with t
 | `Power` | ✅ | `ops/arithmetic.py:117-141` |
 | `Negate` | ✅ | `ops/arithmetic.py:143-166` |
 | `Abs` | ✅ | `ops/arithmetic.py:168-191` |
+| **`Log`** | ✅ **NEW** | `ops/arithmetic.py:194-217` |
+| **`Sign`** | ✅ **NEW** | `ops/arithmetic.py:220-243` |
 
-#### Logical Operators (9/10 = 90%)
+#### Conditional Operators (1 - new category)
+
+| Operator | Status | Location |
+|----------|--------|----------|
+| **`If_Else`** | ✅ **NEW** | `ops/conditional.py:11-122` |
+
+#### Logical Operators (9)
 
 | Operator | Status | Location |
 |----------|--------|----------|
