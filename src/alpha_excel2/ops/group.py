@@ -368,3 +368,136 @@ class GroupNeutralize(BaseOperator):
         else:
             # All NaN - result is all NaN
             return pd.DataFrame(np.nan, index=data.index, columns=data.columns)
+
+
+class GroupScale(BaseOperator):
+    """Group-wise weight scaling operator.
+
+    Scales values within each group separately so that:
+    - Positive values sum to specified long target (default: +1.0)
+    - Negative values sum to specified short target (default: -1.0)
+
+    This enables sector-neutral or industry-neutral portfolio construction where
+    each sector gets equal capital allocation regardless of sector size.
+
+    Example:
+        # Sector-neutral portfolio (each sector: long=1, short=-1)
+        weights = o.group_scale(signal, sector_labels)
+        # Tech sector: longs sum to 1, shorts sum to -1
+        # Finance sector: longs sum to 1, shorts sum to -1
+
+        # Long-only sector portfolio
+        long_weights = o.group_scale(signal, sector_labels, short=0)
+
+        # Custom leverage per sector
+        high_lev = o.group_scale(signal, sector_labels, long=2, short=-2)
+
+    Args:
+        long: Target sum for positive values within each group (default: 1.0)
+        short: Target sum for negative values within each group (default: -1.0)
+
+    Raises:
+        ValueError: If a group has only positive values but short != 0, or
+                   only negative values but long != 0
+
+    Note:
+        - Zero values remain zero
+        - NaN values remain NaN in output
+        - Each group is scaled independently
+        - Stricter NaN handling: filters out positions where value OR group is NaN
+        - Uses pandas groupby + transform for row-by-row processing
+    """
+
+    input_types = ['numeric', 'group']
+    output_type = 'numeric'
+    prefer_numpy = False  # Use pandas groupby (will optimize with NumPy in future)
+
+    def compute(self, data: pd.DataFrame, group_labels: pd.DataFrame, long: float = 1.0, short: float = -1.0) -> pd.DataFrame:
+        """Scale positive and negative values separately within each group.
+
+        Args:
+            data: Input DataFrame (T, N) - numeric values
+            group_labels: Group label DataFrame (T, N) - category dtype expected
+            long: Target sum for positive values (default: 1.0)
+            short: Target sum for negative values (default: -1.0)
+
+        Returns:
+            DataFrame with scaled values (sector-neutral weights)
+
+        Raises:
+            ValueError: If scaling constraints cannot be satisfied
+
+        Note:
+            For each (date, group) combination:
+            - Positive values are scaled to sum to `long`
+            - Negative values are scaled to sum to `short`
+            - Zero and NaN values are preserved
+            - Raises error if group has only positives but short != 0
+            - Raises error if group has only negatives but long != 0
+        """
+        # Stack: Convert 2D → 1D with MultiIndex (date, security)
+        A_stacked = data.stack()
+        B_stacked = group_labels.stack()
+
+        # Create DataFrame for filtering
+        temp_df = pd.DataFrame({'value': A_stacked, 'group': B_stacked})
+
+        # Filter out rows where value OR group is NaN (stricter than other operators)
+        valid_mask = temp_df['value'].notna() & temp_df['group'].notna()
+        valid_df = temp_df[valid_mask]
+
+        if len(valid_df) > 0:
+            # Custom scaling function
+            def scale_group(group_values):
+                """Scale positive and negative values within a group."""
+                # Separate positive and negative (excluding zero and NaN)
+                positive_mask = group_values > 0
+                negative_mask = group_values < 0
+
+                has_positive = positive_mask.any()
+                has_negative = negative_mask.any()
+
+                # Validation: check if scaling is possible
+                if has_positive and not has_negative and short != 0:
+                    raise ValueError(
+                        f"Group has only positive values but short={short} (expected 0). "
+                        f"Cannot scale negative side when no negative values exist."
+                    )
+
+                if has_negative and not has_positive and long != 0:
+                    raise ValueError(
+                        f"Group has only negative values but long={long} (expected 0). "
+                        f"Cannot scale positive side when no positive values exist."
+                    )
+
+                # Create result series (copy to avoid modifying input)
+                result = group_values.copy()
+
+                # Calculate sums
+                if has_positive:
+                    pos_sum = group_values[positive_mask].sum()
+                    if pos_sum > 0:
+                        result[positive_mask] = group_values[positive_mask] / pos_sum * long
+
+                if has_negative:
+                    neg_sum = group_values[negative_mask].sum()
+                    if neg_sum < 0:
+                        result[negative_mask] = group_values[negative_mask] / abs(neg_sum) * abs(short)
+
+                return result
+
+            # Groupby (date, group_label) and apply scaling
+            scaled_values = valid_df.groupby(
+                [valid_df.index.get_level_values(0), valid_df['group']],
+                observed=True
+            )['value'].transform(scale_group)
+
+            # Reconstruct full Series with NaN preserved
+            result_series = pd.Series(index=temp_df.index, dtype=float)
+            result_series[valid_mask] = scaled_values.values
+
+            # Unstack: Convert 1D back to 2D DataFrame
+            return result_series.unstack()
+        else:
+            # All NaN - result is all NaN
+            return pd.DataFrame(np.nan, index=data.index, columns=data.columns)

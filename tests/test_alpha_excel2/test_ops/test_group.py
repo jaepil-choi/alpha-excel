@@ -4,7 +4,7 @@ import pytest
 import pandas as pd
 import numpy as np
 from alpha_excel2.ops.group import (
-    GroupRank, GroupMax, GroupMin, GroupSum, GroupCount, GroupNeutralize
+    GroupRank, GroupMax, GroupMin, GroupSum, GroupCount, GroupNeutralize, GroupScale
 )
 from alpha_excel2.core.alpha_data import AlphaData
 from alpha_excel2.core.universe_mask import UniverseMask
