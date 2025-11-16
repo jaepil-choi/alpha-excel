@@ -5,11 +5,11 @@ This document compares operators implemented in legacy alpha-excel (v1.0) with t
 ## Summary Statistics
 
 - **Legacy v1.0 Total**: 44 operators
-- **Current v2.0 Total**: 45 operators (102% - includes new operators!)
+- **Current v2.0 Total**: 46 operators (105% - includes new operators!)
 - **Missing from v2.0**: 6 operators from v1.0
   - **Deferred for design discussion**: 5 operators (LabelQuantile, MapValues, CompositeGroup, Constant, GroupScalePositive)
   - **To be implemented**: 1 operator (IsNan)
-- **New in v2.0**: 7 operators not in v1.0 (Demean, Zscore, Scale, Log, Sign, If_Else, Ts_Zscore)
+- **New in v2.0**: 8 operators not in v1.0 (Demean, Zscore, Scale, GroupScale, Log, Sign, If_Else, Ts_Zscore)
 
 ### Breakdown by Category
 
@@ -17,19 +17,19 @@ This document compares operators implemented in legacy alpha-excel (v1.0) with t
 |----------|------------|------------|------------|-------|
 | **Time-Series** | 15 | 16 | **107%** ✅ | All v1.0 ported + Ts_Zscore (new) |
 | **Cross-Section** | 2 | 4 | **200%** ✅ | All v1.0 ported + Demean, Zscore, Scale (new) |
-| **Group** | 7 | 6 | **86%** ✅ | 1 deferred: GroupScalePositive |
+| **Group** | 7 | 7 | **100%** ✅ | All v1.0 ported + GroupScale (new), 1 deferred: GroupScalePositive |
 | **Arithmetic** | 7 | 9 | **129%** ✅ | All v1.0 ported + Log, Sign (new) |
 | **Logical** | 10 | 9 | 90% | 1 missing: IsNan |
 | **Conditional** | 0 | 1 | N/A | If_Else (new category) |
 | **Transformation** | 2 | 0 | 0% | 2 deferred: MapValues, CompositeGroup |
 | **Constants** | 1 | 0 | 0% | 1 deferred: Constant |
-| **TOTAL** | **44** | **45** | **102%** | **1 to implement, 5 deferred, 7 new** |
+| **TOTAL** | **44** | **46** | **105%** | **1 to implement, 5 deferred, 8 new** |
 
 ---
 
 ## Implementation Status by Category
 
-### ✅ Implemented in v2.0 (45 operators)
+### ✅ Implemented in v2.0 (46 operators)
 
 #### Time-Series Operators (16 - includes 1 new)
 
@@ -61,7 +61,7 @@ This document compares operators implemented in legacy alpha-excel (v1.0) with t
 | **`Zscore`** | ✅ **NEW** | `ops/crosssection.py:102-154` |
 | **`Scale`** | ✅ **NEW** | `ops/crosssection.py:157-225` |
 
-#### Group Operators (6)
+#### Group Operators (7 - includes 1 new)
 
 | Operator | Status | Location |
 |----------|--------|----------|
@@ -71,6 +71,7 @@ This document compares operators implemented in legacy alpha-excel (v1.0) with t
 | `GroupSum` | ✅ | `ops/group.py:211-274` |
 | `GroupCount` | ✅ | `ops/group.py:277-345` |
 | `GroupNeutralize` | ✅ | `ops/group.py:348-425` |
+| **`GroupScale`** | ✅ **NEW** | `ops/group.py:428-503` |
 
 #### Arithmetic Operators (9 - includes 2 new)
 
