@@ -1,12 +1,12 @@
 """
-Alpha Excel v2.0 - Reduction Operators and AlphaBroadcast Showcase
+Alpha Excel v2.0 - Reduction Operators Showcase
 
 This showcase demonstrates the new reduction operators that transform 2D data (T, N)
-into 1D time series (T, 1) using the AlphaBroadcast class.
+into 1D time series (T, 1) using AlphaData with broadcast type.
 
 Key Features Demonstrated:
 1. Reduction Operators - CrossSum, CrossMean, CrossMedian, CrossStd
-2. AlphaBroadcast Class - 1D time series that can broadcast to 2D
+2. Broadcast Type AlphaData - 1D time series that can broadcast to 2D
 3. Market-Neutral Strategies - Using cross-sectional averages
 4. Dispersion Analysis - Cross-sectional volatility measures
 5. Broadcasting Preview - How 1D data will work with 2D data (Phase 2)
@@ -128,8 +128,8 @@ Reduction Operators (2D -> 1D):
 +---------------------------------------------------------------------+
 
 Output Type:
-  - All reduction operators return AlphaBroadcast (not AlphaData)
-  - AlphaBroadcast is a subclass of AlphaData for 1D time series (T, 1)
+  - All reduction operators return AlphaData with data_type='broadcast'
+  - Broadcast type AlphaData represents 1D time series (T, 1)
   - Shape: (T, 1) with column name '_broadcast_'
   - Will support automatic broadcasting to 2D in Phase 2 (future work)
 
@@ -196,18 +196,19 @@ Example calculation for each time point:
     total_return = o.cross_sum(returns)
 
     print_alpha_data_info(total_return, 'total_return')
-    print(f"\n  Type: {type(total_return).__name__} (should be AlphaBroadcast)")
+    print(f"\n  Type: {type(total_return).__name__} (should be AlphaData)")
+    print(f"  Data Type: {total_return._data_type} (should be broadcast)")
     print(f"  Shape: {total_return._data.shape} (should be (T, 1))")
     print(f"  Column: {total_return._data.columns[0]} (should be '_broadcast_')")
 
-    # Convert to Series for easier viewing
-    total_return_series = total_return.to_series()
+    # Extract series for easier viewing
+    total_return_series = total_return.to_df().iloc[:, 0]
     print_series_info(total_return_series, 'total_return (as Series)', show_head=10)
 
     print("\n[Key Observations]")
-    print("  [+] AlphaBroadcast returned (not AlphaData)")
+    print("  [+] AlphaData with data_type='broadcast' returned")
     print("  [+] Shape is (T, 1) with single column '_broadcast_'")
-    print("  [+] to_series() extracts underlying Series (T,) for convenience")
+    print("  [+] to_df().iloc[:, 0] extracts underlying Series (T,) for convenience")
     print("  [+] NaN values are skipped (skipna=True)")
 
     # ========================================================================
@@ -232,7 +233,7 @@ Example calculation for each time point:
     market_return = o.cross_mean(returns)
 
     print_alpha_data_info(market_return, 'market_return')
-    market_return_series = market_return.to_series()
+    market_return_series = market_return.to_df().iloc[:, 0]
     print_series_info(market_return_series, 'market_return (as Series)', show_head=10)
 
     print("\n[Compare CrossSum vs CrossMean]")
@@ -248,31 +249,100 @@ Example calculation for each time point:
     print("  [+] Ratio shows effective number of securities per day")
     print("  [+] Equal-weighted: All securities have same contribution")
 
-    print_subsection("Market-Neutral Strategy Preview")
+    print_subsection("Automatic Broadcasting - Market-Neutral Strategy")
     print("""
-With Phase 2 broadcasting (future work), this will enable:
+Broadcasting NOW WORKS! No Phase 2 needed - it's already implemented!
 
-  market_ret = o.cross_mean(returns)     # (T, 1) AlphaBroadcast
-  excess_ret = returns - market_ret      # (T, N) AlphaData (automatic broadcast)
+  market_ret = o.cross_mean(returns)     # (T, 1) AlphaData (broadcast type)
+  excess_ret = returns - market_ret      # (T, N) AlphaData (automatic broadcast!)
 
-For now, we can demonstrate the concept manually:
+Let's test all three broadcasting cases:
 """)
 
-    # Manual broadcasting for demonstration
-    market_ret_broadcast = market_return_series.values.reshape(-1, 1)
-    excess_returns = returns.to_df() - market_ret_broadcast
+    # Case 1: (T, N) - (T, 1) -> (T, N)
+    print("\nCase 1: (T, N) - (T, 1) -> (T, N)  [2D - 1D broadcast]")
+    print("  Operation: excess_returns = returns - market_return")
 
-    print(f"\n  Original returns shape: {returns.to_df().shape}")
-    print(f"  Market return shape: {market_return_series.shape} -> broadcasted to {market_ret_broadcast.shape}")
-    print(f"  Excess returns shape: {excess_returns.shape}")
+    excess_returns_alpha = returns - market_return
+
+    print(f"  Left operand:  shape={returns._data.shape}, type={returns._data_type}")
+    print(f"  Right operand: shape={market_return._data.shape}, type={market_return._data_type}")
+    print(f"  Result:        shape={excess_returns_alpha._data.shape}, type={excess_returns_alpha._data_type}")
 
     print("\n  Sample Excess Returns (first 5 days × 5 securities):")
-    print(excess_returns.iloc[:5, :5].to_string())
+    print(excess_returns_alpha._data.iloc[:5, :5].to_string())
 
     print("\n  Verification (excess returns should have mean ~= 0 each day):")
-    daily_mean = excess_returns.mean(axis=1)
+    daily_mean = excess_returns_alpha._data.mean(axis=1)
     print(f"    Daily mean of excess returns: {daily_mean.abs().mean():.10f} (should be ~= 0)")
     print(f"    Max absolute daily mean: {daily_mean.abs().max():.10f}")
+
+    # Case 2: (T, 1) + (T, N) -> (T, N)  [commutative check]
+    print("\n\nCase 2: (T, 1) + (T, N) -> (T, N)  [1D + 2D broadcast, commutative]")
+    print("  Operation: result = market_return + returns")
+
+    result_comm = market_return + returns
+    result_orig = returns + market_return
+
+    print(f"  (1D + 2D) shape: {result_comm._data.shape}")
+    print(f"  (2D + 1D) shape: {result_orig._data.shape}")
+
+    # Verify broadcasting worked correctly
+    print("\n  Verifying broadcast correctness:")
+    market_ret_series = market_return.to_df().iloc[:, 0]
+    for col in returns._data.columns[:3]:  # Check first 3 columns
+        expected = returns._data[col] + market_ret_series
+        actual = result_comm._data[col]
+        matches = np.allclose(expected.values, actual.values, equal_nan=True)
+        if matches:
+            print(f"    Column {col}: [OK] Matches expected")
+        else:
+            print(f"    Column {col}: [ERROR] Does not match!")
+            break
+
+    # Check commutativity
+    if np.allclose(result_comm._data.values, result_orig._data.values, equal_nan=True):
+        print("  [OK] Commutative: (T,1) + (T,N) == (T,N) + (T,1)")
+    else:
+        print("  [ERROR] NOT commutative (unexpected!)")
+
+    # Case 3: (T, 1) OP (T, 1) -> (T, 1)
+    print("\n\nCase 3: (T, 1) OP (T, 1) -> (T, 1)  [1D - 1D stays 1D]")
+    print("  Operation: diff = total_return - market_return")
+
+    diff_1d = total_return - market_return
+
+    print(f"  Left operand:  shape={total_return._data.shape}, type={total_return._data_type}")
+    print(f"  Right operand: shape={market_return._data.shape}, type={market_return._data_type}")
+    print(f"  Result:        shape={diff_1d._data.shape}, type={diff_1d._data_type}")
+
+    # Verify computation correctness
+    print("\n  Verifying computation:")
+    total_ret_series = total_return.to_df().iloc[:, 0]
+    market_ret_series = market_return.to_df().iloc[:, 0]
+    diff_series = diff_1d.to_df().iloc[:, 0]
+    expected_diff = total_ret_series - market_ret_series
+
+    if np.allclose(diff_series.values, expected_diff.values, equal_nan=True):
+        print("    [OK] Computation matches expected: total_return - market_return")
+        print(f"    Sample values (first 3 days):")
+        for i in range(min(3, len(diff_series))):
+            print(f"      Day {i}: {total_ret_series.iloc[i]:.4f} - {market_ret_series.iloc[i]:.6f} = {diff_series.iloc[i]:.4f}")
+    else:
+        print("    [ERROR] Computation does not match expected!")
+
+    # Check type preservation
+    if diff_1d._data_type == 'broadcast':
+        print("  [OK] Type preserved: broadcast -> broadcast")
+    else:
+        print(f"  [ERROR] Type changed to: {diff_1d._data_type}")
+
+    print("\n[Key Achievement]")
+    print("  [+] All three broadcasting cases work automatically!")
+    print("  [+] (T, N) OP (T, 1): Expands (T, 1) to (T, N) and computes")
+    print("  [+] (T, 1) OP (T, N): Expands (T, 1) to (T, N) and computes")
+    print("  [+] (T, 1) OP (T, 1): Preserves (T, 1) shape and broadcast type")
+    print("  [+] No manual numpy.tile() needed - AlphaData handles it!")
 
     # ========================================================================
     #  SECTION 4: CROSSMEDIAN - ROBUST CENTER
@@ -296,7 +366,7 @@ Example calculation for each time point:
     median_return = o.cross_median(returns)
 
     print_alpha_data_info(median_return, 'median_return')
-    median_return_series = median_return.to_series()
+    median_return_series = median_return.to_df().iloc[:, 0]
     print_series_info(median_return_series, 'median_return (as Series)', show_head=10)
 
     print("\n[Compare Mean vs Median]")
@@ -336,7 +406,7 @@ Example calculation for each time point:
     dispersion = o.cross_std(returns)
 
     print_alpha_data_info(dispersion, 'dispersion')
-    dispersion_series = dispersion.to_series()
+    dispersion_series = dispersion.to_df().iloc[:, 0]
     print_series_info(dispersion_series, 'dispersion (as Series)', show_head=10)
 
     print("\n[Dispersion Analysis]")
@@ -429,56 +499,60 @@ Reduction operators support cache inheritance just like other operators:
     print("  [+] Can retrieve cached 1D data from any downstream AlphaData")
 
     # ========================================================================
-    #  SECTION 8: ALPHABROADCAST VALIDATION
+    #  SECTION 8: BROADCAST TYPE VALIDATION
     # ========================================================================
 
-    print_section("AlphaBroadcast Validation", 8)
+    print_section("Broadcast Type Validation", 8)
 
     print("""
-Let's verify the AlphaBroadcast class properties:
+Let's verify the broadcast type AlphaData properties:
 """)
 
-    print_subsection("AlphaBroadcast Type Checks")
+    print_subsection("Broadcast Type Checks")
 
-    from alpha_excel2.core.alpha_data import AlphaBroadcast, AlphaData
+    from alpha_excel2.core.alpha_data import AlphaData
+    from alpha_excel2.core.types import DataType
 
-    print(f"\n  Is market_return an AlphaBroadcast? {isinstance(market_return, AlphaBroadcast)}")
-    print(f"  Is market_return an AlphaData? {isinstance(market_return, AlphaData)}")
-    print(f"  Is returns an AlphaBroadcast? {isinstance(returns, AlphaBroadcast)}")
-    print(f"  Is returns an AlphaData? {isinstance(returns, AlphaData)}")
+    print(f"\n  Is market_return an AlphaData? {isinstance(market_return, AlphaData)}")
+    print(f"  market_return data_type: {market_return._data_type}")
+    print(f"  Is broadcast type? {market_return._data_type == DataType.BROADCAST}")
+    print(f"\n  Is returns an AlphaData? {isinstance(returns, AlphaData)}")
+    print(f"  returns data_type: {returns._data_type}")
+    print(f"  Is broadcast type? {returns._data_type == DataType.BROADCAST}")
 
-    print("\n[Inheritance Hierarchy]")
+    print("\n[Data Type System]")
     print("""
-      AlphaData (base class)
-           ↑
+      AlphaData (single class)
            |
-      AlphaBroadcast (subclass for 1D data)
+           +-- data_type='numeric' (default 2D data)
+           +-- data_type='broadcast' (1D data for broadcasting)
+           +-- data_type='group' (categorical data)
+           +-- data_type='weight' (portfolio weights)
+           ... etc
 
-  AlphaBroadcast is a specialized AlphaData for (T, 1) shaped data.
-  It inherits all AlphaData methods and adds broadcasting capability (Phase 2).
+  No separate class needed - just use data_type attribute!
 """)
 
-    print_subsection("AlphaBroadcast Shape Validation")
+    print_subsection("Broadcast Type Shape Validation")
     print(f"\n  Shape: {market_return._data.shape}")
     print(f"  Columns: {market_return._data.columns.tolist()}")
     print(f"  Data Type: {market_return._data_type}")
 
     print("\n  Shape validation enforced at construction:")
     print("""
-    class AlphaBroadcast(AlphaData):
-        def __init__(self, data, ...):
-            if data.shape[1] != 1:
-                raise ValueError("AlphaBroadcast requires (T, 1) DataFrame")
-            # Force data_type to 'broadcast'
-            super().__init__(data=data, data_type='broadcast', ...)
+    class AlphaData:
+        def __init__(self, data, data_type='numeric', ...):
+            if data_type == DataType.BROADCAST and data.shape[1] != 1:
+                raise ValueError("Broadcast type requires (T, 1) shape")
+            ...
 """)
 
-    print_subsection("to_series() Method")
-    series = market_return.to_series()
+    print_subsection("Series Extraction")
+    series = market_return.to_df().iloc[:, 0]
     print(f"\n  Original shape: {market_return._data.shape} (DataFrame)")
-    print(f"  After to_series(): {series.shape} (Series)")
+    print(f"  After to_df().iloc[:, 0]: {series.shape} (Series)")
     print(f"  Series name: {series.name}")
-    print(f"\n  Convenience method for extracting underlying 1D array.")
+    print(f"\n  Simple pattern for extracting underlying 1D array.")
 
     # ========================================================================
     #  SECTION 9: SUMMARY AND NEXT STEPS
@@ -505,11 +579,11 @@ Let's verify the AlphaBroadcast class properties:
    - Market dispersion indicator
    - High/low dispersion regime detection
 
-5. [DONE] AlphaBroadcast Class
-   - Subclass of AlphaData for 1D data
+5. [DONE] Broadcast Type AlphaData
+   - AlphaData with data_type='broadcast' for 1D data
    - Shape validation: (T, 1) required
-   - to_series() convenience method
-   - data_type = 'broadcast'
+   - Extract series with to_df().iloc[:, 0]
+   - No separate class needed!
 
 6. [DONE] Cache Inheritance
    - record_output=True works with reduction operators
@@ -537,23 +611,23 @@ Phase 2 - 1D -> 2D Broadcasting:
 When Phase 2 is complete, this will work:
 
   # Automatic broadcasting (future)
-  market_ret = o.cross_mean(returns)     # AlphaBroadcast (T, 1)
+  market_ret = o.cross_mean(returns)     # AlphaData with broadcast type (T, 1)
   excess_ret = returns - market_ret      # AlphaData (T, N) - automatic broadcast!
 
   # OLS regression with 1D market return
   market_beta = o.ts_ols_regression(
       y=returns,                          # (T, N) AlphaData
-      x=market_ret,                       # (T, 1) AlphaBroadcast
+      x=market_ret,                       # (T, 1) broadcast AlphaData
       window=60
   )
 
 === KEY ARCHITECTURAL DECISIONS ===
 
-Why AlphaBroadcast as Subclass?
-  [+] Type safety: isinstance() checks work correctly
-  [+] Polymorphism: Can be used wherever AlphaData is expected
-  [+] Specialized behavior: to_series(), broadcasting logic
-  [+] Clear semantics: Shape (T, 1) enforced at construction
+Why Use data_type='broadcast' Instead of Separate Class?
+  [+] Simplicity: No inheritance complexity or circular dependencies
+  [+] Type safety: Check data_type == DataType.BROADCAST
+  [+] Natural broadcasting: Pandas handles (T, 1) expansion natively
+  [+] Consistent API: Same AlphaData interface for all shapes
 
 Why Skip Universe Masking for Broadcast?
   [+] Already (T, 1): No asset dimension to mask
@@ -580,11 +654,11 @@ Basic usage:
   returns = f('returns')  # (T, N) AlphaData
 
   # Reduce to 1D
-  market_ret = o.cross_mean(returns)     # (T, 1) AlphaBroadcast
-  dispersion = o.cross_std(returns)      # (T, 1) AlphaBroadcast
+  market_ret = o.cross_mean(returns)     # (T, 1) AlphaData (broadcast type)
+  dispersion = o.cross_std(returns)      # (T, 1) AlphaData (broadcast type)
 
   # Extract as Series
-  market_series = market_ret.to_series()  # pd.Series (T,)
+  market_series = market_ret.to_df().iloc[:, 0]  # pd.Series (T,)
 
   # Cache for downstream access
   cached_mkt = o.cross_mean(returns, record_output=True)

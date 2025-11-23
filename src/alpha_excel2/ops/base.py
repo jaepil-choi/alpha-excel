@@ -108,29 +108,19 @@ class BaseOperator(ABC):
         # Step 5: Inherit cache
         inherited_cache = self._inherit_caches(inputs)
 
-        # Step 6: Construct AlphaData (or AlphaBroadcast)
+        # Step 6: Construct AlphaData with appropriate data_type
         step_counter = self._compute_step_counter(inputs)
         step_history = self._build_step_history(inputs, params)
 
-        # Return AlphaBroadcast for broadcast output_type
-        if self.output_type == 'broadcast':
-            from ..core.alpha_data import AlphaBroadcast
-            return AlphaBroadcast(
-                data=result_data,
-                step_counter=step_counter,
-                step_history=step_history,
-                cached=record_output,
-                cache=inherited_cache
-            )
-        else:
-            return AlphaData(
-                data=result_data,
-                data_type=self.output_type,
-                step_counter=step_counter,
-                step_history=step_history,
-                cached=record_output,
-                cache=inherited_cache
-            )
+        # Return AlphaData with broadcast data_type for broadcast operators
+        return AlphaData(
+            data=result_data,
+            data_type=self.output_type,  # Will be 'broadcast' for reduction operators
+            step_counter=step_counter,
+            step_history=step_history,
+            cached=record_output,
+            cache=inherited_cache
+        )
 
     @abstractmethod
     def compute(self, *data, **params):

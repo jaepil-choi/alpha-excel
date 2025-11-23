@@ -67,13 +67,23 @@ class AlphaData(DataModel):
         """Initialize AlphaData.
 
         Args:
-            data: pandas DataFrame with shape (T, N)
-            data_type: Type of data (numeric, group, weight, etc.)
+            data: pandas DataFrame with shape (T, N) or (T, 1) for broadcast
+            data_type: Type of data (numeric, group, weight, broadcast, etc.)
             step_counter: Number of operations applied
             step_history: List of operation descriptions
             cached: Whether this data should be cached
             cache: List of cached upstream steps
+
+        Raises:
+            ValueError: If data_type is 'broadcast' but shape is not (T, 1)
         """
+        # Validate broadcast type has (T, 1) shape
+        if data_type == DataType.BROADCAST and data.shape[1] != 1:
+            raise ValueError(
+                f"Broadcast type requires (T, 1) shape, got {data.shape}. "
+                f"Use reduction operators (CrossSum, CrossMean, etc.) to create broadcast data."
+            )
+
         super().__init__()
         self._data = data
         self._data_type = data_type
@@ -139,6 +149,53 @@ class AlphaData(DataModel):
         last_step = self._step_history[-1]
         return last_step.get('expr', 'unknown')
 
+    def _needs_broadcasting(self, other: 'AlphaData') -> bool:
+        """Check if broadcasting is needed between self and other.
+
+        Broadcasting is needed when one operand is broadcast type (T, 1)
+        and the other is not.
+
+        Args:
+            other: Another AlphaData instance
+
+        Returns:
+            True if broadcasting needed, False otherwise
+        """
+        self_is_broadcast = self._data_type == DataType.BROADCAST
+        other_is_broadcast = other._data_type == DataType.BROADCAST
+
+        # Broadcasting needed if exactly one is broadcast type
+        return self_is_broadcast != other_is_broadcast
+
+    def _broadcast_operands(self, other: 'AlphaData') -> tuple:
+        """Broadcast (T, 1) to match (T, N) shape.
+
+        Args:
+            other: Another AlphaData instance
+
+        Returns:
+            Tuple of (left_df, right_df, result_type) where DataFrames
+            have matching columns and result_type is the output data_type
+        """
+        if self._data_type == DataType.BROADCAST:
+            # self is (T, 1), other is (T, N)
+            # Expand self to match other's columns by tiling
+            broadcast_expanded = pd.DataFrame(
+                np.tile(self._data.values, (1, len(other._data.columns))),  # Tile (T, 1) -> (T, N)
+                index=self._data.index,
+                columns=other._data.columns  # Use other's columns
+            )
+            return broadcast_expanded, other._data, other._data_type
+        else:
+            # self is (T, N), other is (T, 1)
+            # Expand other to match self's columns by tiling
+            broadcast_expanded = pd.DataFrame(
+                np.tile(other._data.values, (1, len(self._data.columns))),  # Tile (T, 1) -> (T, N)
+                index=other._data.index,
+                columns=self._data.columns  # Use self's columns
+            )
+            return self._data, broadcast_expanded, self._data_type
+
     def _create_binary_op_result(
         self,
         other: Union['AlphaData', float, int],
@@ -146,10 +203,11 @@ class AlphaData(DataModel):
         op_func,
         output_type: str = None
     ) -> 'AlphaData':
-        """Simplified helper for binary operations.
+        """Simplified helper for binary operations with broadcasting support.
 
-        Magic methods are lightweight - they just do the pandas operation.
-        Full pipeline (masking, validation) happens in BaseOperator.
+        Handles broadcasting when one operand is broadcast type (T, 1)
+        and the other is not. Magic methods delegate to this for all
+        arithmetic operations.
 
         Args:
             other: Right operand (AlphaData or scalar)
@@ -162,7 +220,20 @@ class AlphaData(DataModel):
         """
         # Compute result
         if isinstance(other, AlphaData):
-            result_data = op_func(self._data, other._data)
+            # Check if broadcasting needed
+            if self._needs_broadcasting(other):
+                # Manually broadcast (T, 1) -> (T, N)
+                left_df, right_df, result_type = self._broadcast_operands(other)
+                result_data = op_func(left_df, right_df)
+            else:
+                # No broadcasting - same shape or both broadcast
+                result_data = op_func(self._data, other._data)
+                # Determine result type: preserve broadcast if both are broadcast
+                if self._data_type == DataType.BROADCAST and other._data_type == DataType.BROADCAST:
+                    result_type = DataType.BROADCAST
+                else:
+                    result_type = self._data_type
+
             new_step_counter = max(self._step_counter, other._step_counter) + 1
 
             # Cache inheritance: copy upstream caches AND add cached operands
@@ -193,6 +264,10 @@ class AlphaData(DataModel):
             # Simple history merge
             new_history = self._step_history + other._step_history
             expr_str = f"({self._build_expression_string()} {op_name} {other._build_expression_string()})"
+
+            # Use broadcasting result type if available
+            if 'result_type' in locals() and output_type is None:
+                output_type = result_type
         else:
             # Scalar operation
             result_data = op_func(self._data, other)
@@ -563,110 +638,18 @@ class AlphaData(DataModel):
             raise TypeError(f"Cannot convert type '{data_type}' to boolean")
 
     def __repr__(self) -> str:
-        """Return string representation with expression."""
+        """Return string representation with expression.
+
+        Shows 'AlphaBroadcast' for broadcast type, 'AlphaData' otherwise.
+        """
         expr_str = self._build_expression_string()
+        class_name = "AlphaBroadcast" if self._data_type == DataType.BROADCAST else "AlphaData"
         return (
-            f"AlphaData("
+            f"{class_name}("
             f"expr='{expr_str}', "
             f"type={self._data_type}, "
             f"step={self._step_counter}, "
             f"shape={self._data.shape if self._data is not None else None}, "
-            f"cached={self._cached}, "
-            f"num_cached_steps={len(self._cache)})"
-        )
-
-
-class AlphaBroadcast(AlphaData):
-    """1D time-series (T, 1) that broadcasts to 2D when used with 2D inputs.
-
-    AlphaBroadcast is a specialized subclass of AlphaData for representing
-    1D time series data that should broadcast across all assets when used
-    in operations with 2D data.
-
-    Created by reduction operators (CrossSum, CrossMean, etc.) that aggregate
-    across assets (columns). Automatically expands to (T, N) when used in
-    operators with 2D inputs.
-
-    Key Properties:
-    - Shape must be (T, 1) - single column DataFrame
-    - data_type is always 'broadcast'
-    - Broadcasts to match 2D input shape in operators
-    - Can be converted to Series via to_series()
-
-    Example:
-        # Create via reduction operator
-        returns = f('returns')  # AlphaData (T, N)
-        market_ret = o.cross_mean(returns)  # AlphaBroadcast (T, 1)
-
-        # Automatic broadcasting in operations
-        excess_ret = returns - market_ret  # market_ret broadcasts to (T, N)
-
-        # Extract Series
-        market_series = market_ret.to_series()  # pd.Series (T,)
-
-    Attributes:
-        _data: DataFrame with shape (T, 1)
-        _data_type: Always 'broadcast'
-        (Other attributes inherited from AlphaData)
-    """
-
-    def __init__(
-        self,
-        data: pd.DataFrame,
-        step_counter: int = 0,
-        step_history: Optional[List[Dict]] = None,
-        cached: bool = False,
-        cache: Optional[List[CachedStep]] = None
-    ):
-        """Initialize AlphaBroadcast.
-
-        Args:
-            data: DataFrame with shape (T, 1)
-            step_counter: Number of operations applied
-            step_history: List of operation descriptions
-            cached: Whether this data should be cached
-            cache: List of cached upstream steps
-
-        Raises:
-            ValueError: If data is not (T, 1) shape
-        """
-        # Validate shape
-        if data.shape[1] != 1:
-            raise ValueError(
-                f"AlphaBroadcast requires (T, 1) DataFrame, got shape {data.shape}. "
-                f"Use reduction operators (CrossSum, CrossMean, etc.) to create 1D data."
-            )
-
-        # Force data_type to 'broadcast'
-        super().__init__(
-            data=data,
-            data_type=DataType.BROADCAST,
-            step_counter=step_counter,
-            step_history=step_history,
-            cached=cached,
-            cache=cache
-        )
-
-    def to_series(self) -> pd.Series:
-        """Extract underlying Series (T,).
-
-        Returns:
-            pd.Series with single column extracted
-
-        Example:
-            market_ret = o.cross_mean(returns)  # AlphaBroadcast (T, 1)
-            market_series = market_ret.to_series()  # pd.Series (T,)
-        """
-        return self._data.iloc[:, 0]
-
-    def __repr__(self) -> str:
-        """Return string representation."""
-        expr_str = self._build_expression_string()
-        return (
-            f"AlphaBroadcast("
-            f"expr='{expr_str}', "
-            f"step={self._step_counter}, "
-            f"shape={self._data.shape}, "
             f"cached={self._cached}, "
             f"num_cached_steps={len(self._cache)})"
         )

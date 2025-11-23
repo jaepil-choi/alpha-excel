@@ -4,6 +4,244 @@ This document records critical discoveries from experiments, including what work
 
 ---
 
+## Phase 2 Broadcasting: AlphaBroadcast Arithmetic Behavior
+
+### Experiment 39: AlphaBroadcast Arithmetic Operations
+
+**Date**: 2025-01-28
+**Status**: 🔴 CRITICAL BUGS FOUND
+
+**Summary**: Tested all three cases of broadcasting arithmetic to validate current behavior before implementing Phase 2. Discovered two critical bugs that prevent broadcasting from working correctly:
+
+1. **Type Preservation Bug**: `AlphaBroadcast OP AlphaBroadcast` returns `AlphaData` instead of `AlphaBroadcast`
+2. **Column Misalignment Bug**: Mixed 1D/2D operations produce (T, 4) with NaN values instead of proper broadcasting
+
+#### Critical Bugs
+
+**Bug 1: Type Not Preserved (Case 1: 1D OP 1D)**
+
+```python
+# Case 1: (T, 1) / (T, 1) -> (T, 1)
+total_return = CrossSum(returns)  # AlphaBroadcast (3, 1)
+total_cap = CrossSum(market_cap)  # AlphaBroadcast (3, 1)
+
+result = total_return / total_cap
+# Expected: AlphaBroadcast (3, 1)
+# Actual:   AlphaData (3, 1) with data_type='broadcast'
+```
+
+**Symptoms**:
+- Result is `AlphaData` instance, not `AlphaBroadcast`
+- `to_series()` method unavailable (AttributeError)
+- Shape validation lost (no enforcement of (T, 1))
+- Wrong `__repr__` output (shows as AlphaData)
+
+**Root Cause**:
+```python
+# In AlphaData._create_binary_op_result()
+return AlphaData(  # Always returns AlphaData, never AlphaBroadcast!
+    data=result_data,
+    data_type=output_type if output_type else self._data_type,
+    ...
+)
+```
+
+**Impact**:
+- ⚠️ **Breaks cap-weighted return pattern**: Cannot chain `to_series()` after division
+- ⚠️ **Type safety lost**: Result can accidentally become (T, N) without error
+- ⚠️ **User confusion**: Type changes unexpectedly
+
+**Bug 2: Column Misalignment in Mixed 1D/2D Operations (Cases 2 & 3)**
+
+```python
+# Case 2: (T, N) - (T, 1) -> should be (T, N)
+returns = AlphaData(...)       # Shape (3, 3), columns=['A', 'B', 'C']
+market_return = AlphaBroadcast(...)  # Shape (3, 1), columns=['_broadcast_']
+
+excess = returns - market_return
+# Expected: (3, 3) with columns=['A', 'B', 'C']
+# Actual:   (3, 4) with columns=['A', 'B', 'C', '_broadcast_'] - ALL NaN!
+```
+
+**Symptoms**:
+- Shape is (T, N+1) instead of (T, N)
+- Column names are concatenated: ['A', 'B', 'C', '_broadcast_']
+- All values are NaN (no actual computation happened)
+- Broadcasting did NOT occur
+
+**Root Cause**:
+Pandas tries to align columns before operating:
+```python
+# When pandas sees:
+df1 (columns=['A', 'B', 'C']) - df2 (columns=['_broadcast_'])
+
+# It creates outer join of columns:
+# Result columns = ['A', 'B', 'C', '_broadcast_']
+# df1 has NaN for '_broadcast_' column
+# df2 has NaN for 'A', 'B', 'C' columns
+# NaN - anything = NaN
+```
+
+**Impact**:
+- 🔴 **CRITICAL**: Cases 2 & 3 completely broken
+- 🔴 **Cannot compute excess returns**: `returns - market_return` fails
+- 🔴 **Cannot compute beta**: Division by broadcast variance fails
+- 🔴 **Blocks all broadcasting use cases**
+
+#### What Works (Case 1 with bugs)
+
+✅ **Case 1: (T, 1) OP (T, 1) -> (T, 1)** - Shape correct, values correct
+- Division: ✅ Works (but wrong type)
+- Subtraction: ✅ Works (but wrong type)
+- Addition: ✅ Works (but wrong type)
+- Multiplication: ✅ Works (but wrong type)
+- **Cap-weighted return**: ✅ Math is correct (values verified)
+
+**Example Output**:
+```
+Cap-weighted return calculation (verified manually):
+2024-01-01: 0.007778 ✓
+2024-01-02: 0.009139 ✓
+2024-01-03: 0.010197 ✓
+```
+
+#### What's Broken (Cases 2 & 3)
+
+🔴 **Case 2: (T, N) OP (T, 1) -> BROKEN** - Produces (T, N+1) with NaN
+🔴 **Case 3: (T, 1) OP (T, N) -> BROKEN** - Produces (T, N+1) with NaN
+
+**Failed Operations**:
+- `returns - market_return`: Shape (3, 4), all NaN
+- `market_cap / total_cap`: Shape (3, 4), all NaN
+- `market_return + returns`: Shape (3, 4), all NaN
+- `total_cap * (1/market_cap)`: Shape (3, 4), all NaN
+
+#### Architecture Implications
+
+**Required Fixes (Priority Order)**:
+
+1. **Fix Column Misalignment (CRITICAL)** ⭐⭐⭐
+   - Override `_create_binary_op_result()` to handle broadcasting
+   - Detect when columns don't match: `['A', 'B', 'C']` vs `['_broadcast_']`
+   - Manually broadcast (T, 1) to (T, N) BEFORE pandas operation
+   - Use: `pd.DataFrame(broadcast_data.values, index, columns=other_columns)`
+
+2. **Fix Type Preservation (HIGH)** ⭐⭐
+   - Override arithmetic methods in `AlphaBroadcast`
+   - Return `AlphaBroadcast` when result is (T, 1)
+   - Return `AlphaData` when result is (T, N) (after broadcasting)
+   - Preserve `to_series()` method availability
+
+3. **Add Shape Validation (MEDIUM)** ⭐
+   - Validate result shape after pandas operation
+   - Raise error if unexpected shape change
+   - Provide clear error messages for misaligned data
+
+**Design Decision**:
+
+Broadcasting must happen **BEFORE** pandas operation, not rely on pandas:
+
+```python
+# WRONG (current - relies on pandas):
+result = left_df - right_df  # Pandas does column alignment -> NaN
+
+# CORRECT (needed):
+if right is AlphaBroadcast and left is not:
+    # Manually broadcast (T, 1) -> (T, N)
+    right_expanded = pd.DataFrame(
+        right._data.values,  # Take the (T, 1) values
+        index=right._data.index,
+        columns=left._data.columns  # Use left's columns
+    )
+    result = left_df - right_expanded  # Now columns match!
+```
+
+#### Implementation Pattern
+
+**Step 1: Detect Broadcasting Need**
+```python
+def _needs_broadcasting(self, other):
+    """Check if we need manual broadcasting."""
+    if not isinstance(other, AlphaData):
+        return False
+
+    # Case 1: Both same shape -> no broadcasting
+    if self._data.shape == other._data.shape:
+        return False
+
+    # Case 2/3: Different shapes -> need broadcasting
+    return True
+```
+
+**Step 2: Perform Manual Broadcasting**
+```python
+def _broadcast_operands(self, other):
+    """Manually broadcast (T, 1) to match (T, N)."""
+    # Determine which is broadcast and which is 2D
+    if isinstance(self, AlphaBroadcast):
+        broadcast_df = self._data
+        ref_df = other._data
+        broadcast_left = True
+    else:
+        broadcast_df = other._data
+        ref_df = self._data
+        broadcast_left = False
+
+    # Expand (T, 1) -> (T, N) using reference columns
+    expanded = pd.DataFrame(
+        broadcast_df.values,  # (T, 1) array
+        index=broadcast_df.index,
+        columns=ref_df.columns  # Use 2D columns
+    )
+
+    if broadcast_left:
+        return expanded, ref_df
+    else:
+        return ref_df, expanded
+```
+
+**Step 3: Override Arithmetic**
+```python
+def __sub__(self, other):
+    """Subtract with manual broadcasting if needed."""
+    if self._needs_broadcasting(other):
+        left, right = self._broadcast_operands(other)
+        result_data = left - right
+        # ... wrap in AlphaData/AlphaBroadcast based on shape
+    else:
+        # Use existing logic
+        return super().__sub__(other)
+```
+
+#### Test Coverage Needed
+
+**Unit Tests** (`test_alpha_broadcast.py`):
+- ✅ Type preservation: `AlphaBroadcast OP AlphaBroadcast -> AlphaBroadcast`
+- ✅ Shape validation: Result is (T, 1)
+- ✅ `to_series()` method available after arithmetic
+- ✅ All operators: `+`, `-`, `*`, `/`, `**`
+
+**Broadcasting Tests** (`test_broadcasting.py`):
+- ✅ Case 2: `(T, N) - (T, 1)` -> (T, N) with correct values
+- ✅ Case 3: `(T, 1) + (T, N)` -> (T, N) with correct values
+- ✅ Commutativity: `(T,1) + (T,N) == (T,N) + (T,1)`
+- ✅ Column preservation: Result has same columns as 2D input
+- ✅ No NaN artifacts: All values computed correctly
+- ✅ Cap-weighted return pattern
+- ✅ Excess return pattern
+
+#### Lessons Learned
+
+1. **Pandas column alignment is NOT broadcasting**: Pandas aligns by column NAME, creating outer join with NaN padding. This is NOT the broadcasting we want.
+
+2. **Manual broadcasting required**: Cannot rely on pandas for (T, 1) -> (T, N) expansion. Must explicitly create DataFrame with matching columns.
+
+3. **Type preservation matters**: Losing AlphaBroadcast type breaks method chaining and user expectations.
+
+4. **Test early**: This bug would have been caught immediately with proper tests for mixed 1D/2D operations.
+
+---
+
 ## Phase 31: FnGuide Data Integration (ETL → alpha-database)
 
 ### Experiment 31: FnGuide Data Loading via alpha-database

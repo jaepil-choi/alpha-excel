@@ -2,13 +2,14 @@
 Tests for reduction operators (2D → 1D)
 
 Tests CrossSum, CrossMean, CrossMedian, CrossStd operators that reduce
-(T, N) AlphaData to (T, 1) AlphaBroadcast.
+(T, N) AlphaData to (T, 1) AlphaData with broadcast type.
 """
 
 import pytest
 import pandas as pd
 import numpy as np
-from alpha_excel2.core.alpha_data import AlphaData, AlphaBroadcast
+from alpha_excel2.core.alpha_data import AlphaData
+from alpha_excel2.core.types import DataType
 from alpha_excel2.ops.reduction import CrossSum, CrossMean, CrossMedian, CrossStd
 from alpha_excel2.core.universe_mask import UniverseMask
 from alpha_excel2.core.config_manager import ConfigManager
@@ -56,12 +57,12 @@ class TestCrossSum:
         result = op(data)
 
         # Verify
-        assert isinstance(result, AlphaBroadcast), "Should return AlphaBroadcast"
+        assert isinstance(result, AlphaData), "Should return AlphaData"
+        assert result._data_type == DataType.BROADCAST, "Should have broadcast type"
         assert result._data.shape == (5, 1), "Should be (T, 1) shape"
-        assert result._data_type == 'broadcast', "Should have broadcast type"
 
         expected = pd.Series([6, 15, 24, 33, 42], index=dates)
-        pd.testing.assert_series_equal(result.to_series(), expected, check_names=False)
+        pd.testing.assert_series_equal(result.to_df().iloc[:, 0], expected, check_names=False)
 
     def test_cross_sum_with_nans(self, mock_universe_mask, mock_config_manager):
         """Test CrossSum handles NaN values (skipna=True)."""
@@ -81,7 +82,7 @@ class TestCrossSum:
         result = op(data)
 
         expected = pd.Series([3.0, 3.0, 15.0], index=dates)  # NaNs skipped
-        pd.testing.assert_series_equal(result.to_series(), expected, check_names=False)
+        pd.testing.assert_series_equal(result.to_df().iloc[:, 0], expected, check_names=False)
 
     def test_cross_sum_all_nans(self, mock_universe_mask, mock_config_manager):
         """Test CrossSum with all-NaN row."""
@@ -99,8 +100,8 @@ class TestCrossSum:
         op = CrossSum(mock_universe_mask, mock_config_manager)
         result = op(data)
 
-        assert result.to_series().iloc[0] == 6.0
-        assert result.to_series().iloc[1] == 0.0  # Sum of no values is 0
+        assert result.to_df().iloc[0, 0] == 6.0
+        assert result.to_df().iloc[1, 0] == 0.0  # Sum of no values is 0
 
     def test_cross_sum_preserves_step_counter(self, mock_universe_mask, mock_config_manager):
         """Test that reduction increments step counter."""
@@ -137,11 +138,11 @@ class TestCrossMean:
         op = CrossMean(mock_universe_mask, mock_config_manager)
         result = op(data)
 
-        assert isinstance(result, AlphaBroadcast)
+        assert isinstance(result, AlphaData)
         assert result._data.shape == (3, 1)
 
         expected = pd.Series([0.02, 0.00, 0.02], index=dates)
-        pd.testing.assert_series_equal(result.to_series(), expected, check_names=False)
+        pd.testing.assert_series_equal(result.to_df().iloc[:, 0], expected, check_names=False)
 
     def test_cross_mean_with_nans(self, mock_universe_mask, mock_config_manager):
         """Test CrossMean skips NaN values."""
@@ -161,7 +162,7 @@ class TestCrossMean:
         result = op(data)
 
         expected = pd.Series([1.5, 5.0, 9.0], index=dates)
-        pd.testing.assert_series_equal(result.to_series(), expected, check_names=False)
+        pd.testing.assert_series_equal(result.to_df().iloc[:, 0], expected, check_names=False)
 
     def test_cross_mean_all_nans(self, mock_universe_mask, mock_config_manager):
         """Test CrossMean with all-NaN row returns NaN."""
@@ -179,8 +180,8 @@ class TestCrossMean:
         op = CrossMean(mock_universe_mask, mock_config_manager)
         result = op(data)
 
-        assert result.to_series().iloc[0] == 2.0
-        assert pd.isna(result.to_series().iloc[1])  # All NaN → NaN
+        assert result.to_df().iloc[0, 0] == 2.0
+        assert pd.isna(result.to_df().iloc[1, 0])  # All NaN → NaN
 
 
 class TestCrossMedian:
@@ -203,9 +204,9 @@ class TestCrossMedian:
         op = CrossMedian(mock_universe_mask, mock_config_manager)
         result = op(data)
 
-        assert isinstance(result, AlphaBroadcast)
+        assert isinstance(result, AlphaData)
         expected = pd.Series([2.0, 20.0, 200.0], index=dates)
-        pd.testing.assert_series_equal(result.to_series(), expected, check_names=False)
+        pd.testing.assert_series_equal(result.to_df().iloc[:, 0], expected, check_names=False)
 
     def test_cross_median_even_count(self, mock_universe_mask, mock_config_manager):
         """Test CrossMedian with even number of values."""
@@ -232,7 +233,7 @@ class TestCrossMedian:
         result = op(data)
 
         expected = pd.Series([2.5, 25.0], index=dates)
-        pd.testing.assert_series_equal(result.to_series(), expected, check_names=False)
+        pd.testing.assert_series_equal(result.to_df().iloc[:, 0], expected, check_names=False)
 
     def test_cross_median_with_nans(self, mock_universe_mask, mock_config_manager):
         """Test CrossMedian skips NaN values."""
@@ -251,7 +252,7 @@ class TestCrossMedian:
         result = op(data)
 
         expected = pd.Series([2.0, 15.0], index=dates)
-        pd.testing.assert_series_equal(result.to_series(), expected, check_names=False)
+        pd.testing.assert_series_equal(result.to_df().iloc[:, 0], expected, check_names=False)
 
 
 class TestCrossStd:
@@ -273,9 +274,9 @@ class TestCrossStd:
         op = CrossStd(mock_universe_mask, mock_config_manager)
         result = op(data)
 
-        assert isinstance(result, AlphaBroadcast)
+        assert isinstance(result, AlphaData)
         expected = pd.Series([1.0, 0.0], index=dates)
-        pd.testing.assert_series_equal(result.to_series(), expected, check_names=False)
+        pd.testing.assert_series_equal(result.to_df().iloc[:, 0], expected, check_names=False)
 
     def test_cross_std_with_nans(self, mock_universe_mask, mock_config_manager):
         """Test CrossStd skips NaN values."""
@@ -294,8 +295,8 @@ class TestCrossStd:
         result = op(data)
 
         # std([1, 2]) with ddof=1 = sqrt(0.5) = 0.7071...
-        assert np.isclose(result.to_series().iloc[0], np.sqrt(0.5))
-        assert result.to_series().iloc[1] == 0.0
+        assert np.isclose(result.to_df().iloc[0, 0], np.sqrt(0.5))
+        assert result.to_df().iloc[1, 0] == 0.0
 
     def test_cross_std_single_value(self, mock_universe_mask, mock_config_manager):
         """Test CrossStd with single non-NaN value returns NaN."""
@@ -313,7 +314,7 @@ class TestCrossStd:
         result = op(data)
 
         # With ddof=1 and only one value, std is NaN
-        assert pd.isna(result.to_series().iloc[0])
+        assert pd.isna(result.to_df().iloc[0, 0])
 
 
 class TestReductionCommon:
@@ -321,7 +322,7 @@ class TestReductionCommon:
 
     @pytest.mark.parametrize("operator_class", [CrossSum, CrossMean, CrossMedian, CrossStd])
     def test_reduction_returns_alpha_broadcast(self, operator_class, mock_universe_mask, mock_config_manager):
-        """Test that all reduction operators return AlphaBroadcast."""
+        """Test that all reduction operators return AlphaData with broadcast type."""
         dates = pd.date_range('2023-01-01', periods=3)
         data = AlphaData(
             data=pd.DataFrame(
@@ -335,8 +336,8 @@ class TestReductionCommon:
         op = operator_class(mock_universe_mask, mock_config_manager)
         result = op(data)
 
-        assert isinstance(result, AlphaBroadcast), f"{operator_class.__name__} should return AlphaBroadcast"
-        assert result._data_type == 'broadcast', f"{operator_class.__name__} should have broadcast type"
+        assert isinstance(result, AlphaData), f"{operator_class.__name__} should return AlphaData"
+        assert result._data_type == DataType.BROADCAST, f"{operator_class.__name__} should have broadcast type"
         assert result._data.shape[1] == 1, f"{operator_class.__name__} should have 1 column"
 
     @pytest.mark.parametrize("operator_class", [CrossSum, CrossMean, CrossMedian, CrossStd])
@@ -377,7 +378,7 @@ class TestReductionCommon:
 
     @pytest.mark.parametrize("operator_class", [CrossSum, CrossMean, CrossMedian, CrossStd])
     def test_reduction_to_series_works(self, operator_class, mock_universe_mask, mock_config_manager):
-        """Test that to_series() method works."""
+        """Test that extracting series from broadcast AlphaData works."""
         dates = pd.date_range('2023-01-01', periods=3)
         data = AlphaData(
             data=pd.DataFrame(
@@ -391,8 +392,8 @@ class TestReductionCommon:
         op = operator_class(mock_universe_mask, mock_config_manager)
         result = op(data)
 
-        series = result.to_series()
-        assert isinstance(series, pd.Series), f"{operator_class.__name__} to_series() should return Series"
+        series = result.to_df().iloc[:, 0]
+        assert isinstance(series, pd.Series), f"{operator_class.__name__} to_df().iloc[:, 0] should return Series"
         assert len(series) == 3
         pd.testing.assert_index_equal(series.index, dates)
 
