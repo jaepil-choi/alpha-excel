@@ -8,7 +8,7 @@ Defines data types used throughout the system for type-aware operations.
 class DataType:
     """Data type constants for type-aware operations.
 
-    Type system with 6 concrete types and 1 abstract type:
+    Type system with 7 concrete types and 1 abstract type:
 
     Concrete types (semantic meaning):
     - NUMERIC: Numerical data (returns, prices, signals)
@@ -16,6 +16,7 @@ class DataType:
     - PORT_RETURN: Position-level returns
     - GROUP: Categorical data (industry, sector)
     - BOOLEAN: Boolean values (True/False, no NaN)
+    - BROADCAST: 1D time series (T, 1) that broadcasts to 2D
     - OBJECT: Other types (fallback)
 
     Abstract type (for operator validation):
@@ -32,6 +33,7 @@ class DataType:
     PORT_RETURN = 'port_return'  # Position-level returns
     GROUP = 'group'            # Categorical data (industry, sector)
     BOOLEAN = 'boolean'        # Boolean values (True/False, no NaN)
+    BROADCAST = 'broadcast'    # 1D time series (T, 1) that broadcasts to 2D
     OBJECT = 'object'          # Other types (strings, etc.)
 
     # Abstract type: numeric-like types (interchangeable for numeric operations)
@@ -46,6 +48,7 @@ class DataType:
             cls.PORT_RETURN,
             cls.GROUP,
             cls.BOOLEAN,
+            cls.BROADCAST,
             cls.OBJECT,
         ]
 

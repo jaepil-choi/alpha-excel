@@ -101,24 +101,36 @@ class BaseOperator(ABC):
             else:
                 raise ValueError("Cannot convert numpy array to DataFrame without input reference")
 
-        # Step 4: Apply OUTPUT mask
-        result_data = self._universe_mask.apply_mask(result_data)
+        # Step 4: Apply OUTPUT mask (skip for broadcast - already (T, 1))
+        if self.output_type != 'broadcast':
+            result_data = self._universe_mask.apply_mask(result_data)
 
         # Step 5: Inherit cache
         inherited_cache = self._inherit_caches(inputs)
 
-        # Step 6: Construct AlphaData
+        # Step 6: Construct AlphaData (or AlphaBroadcast)
         step_counter = self._compute_step_counter(inputs)
         step_history = self._build_step_history(inputs, params)
 
-        return AlphaData(
-            data=result_data,
-            data_type=self.output_type,
-            step_counter=step_counter,
-            step_history=step_history,
-            cached=record_output,
-            cache=inherited_cache
-        )
+        # Return AlphaBroadcast for broadcast output_type
+        if self.output_type == 'broadcast':
+            from ..core.alpha_data import AlphaBroadcast
+            return AlphaBroadcast(
+                data=result_data,
+                step_counter=step_counter,
+                step_history=step_history,
+                cached=record_output,
+                cache=inherited_cache
+            )
+        else:
+            return AlphaData(
+                data=result_data,
+                data_type=self.output_type,
+                step_counter=step_counter,
+                step_history=step_history,
+                cached=record_output,
+                cache=inherited_cache
+            )
 
     @abstractmethod
     def compute(self, *data, **params):

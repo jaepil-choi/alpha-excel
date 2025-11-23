@@ -13,7 +13,7 @@ from datetime import datetime
 from src.alpha_excel2.core.facade import AlphaExcel
 from src.alpha_excel2.core.alpha_data import AlphaData
 from src.alpha_excel2.core.types import DataType
-from tests.conftest import MockDataSource
+from tests.test_alpha_excel2.mocks.mock_data_source import MockDataSource
 
 
 class TestSetUniverseValidation:

@@ -574,3 +574,99 @@ class AlphaData(DataModel):
             f"cached={self._cached}, "
             f"num_cached_steps={len(self._cache)})"
         )
+
+
+class AlphaBroadcast(AlphaData):
+    """1D time-series (T, 1) that broadcasts to 2D when used with 2D inputs.
+
+    AlphaBroadcast is a specialized subclass of AlphaData for representing
+    1D time series data that should broadcast across all assets when used
+    in operations with 2D data.
+
+    Created by reduction operators (CrossSum, CrossMean, etc.) that aggregate
+    across assets (columns). Automatically expands to (T, N) when used in
+    operators with 2D inputs.
+
+    Key Properties:
+    - Shape must be (T, 1) - single column DataFrame
+    - data_type is always 'broadcast'
+    - Broadcasts to match 2D input shape in operators
+    - Can be converted to Series via to_series()
+
+    Example:
+        # Create via reduction operator
+        returns = f('returns')  # AlphaData (T, N)
+        market_ret = o.cross_mean(returns)  # AlphaBroadcast (T, 1)
+
+        # Automatic broadcasting in operations
+        excess_ret = returns - market_ret  # market_ret broadcasts to (T, N)
+
+        # Extract Series
+        market_series = market_ret.to_series()  # pd.Series (T,)
+
+    Attributes:
+        _data: DataFrame with shape (T, 1)
+        _data_type: Always 'broadcast'
+        (Other attributes inherited from AlphaData)
+    """
+
+    def __init__(
+        self,
+        data: pd.DataFrame,
+        step_counter: int = 0,
+        step_history: Optional[List[Dict]] = None,
+        cached: bool = False,
+        cache: Optional[List[CachedStep]] = None
+    ):
+        """Initialize AlphaBroadcast.
+
+        Args:
+            data: DataFrame with shape (T, 1)
+            step_counter: Number of operations applied
+            step_history: List of operation descriptions
+            cached: Whether this data should be cached
+            cache: List of cached upstream steps
+
+        Raises:
+            ValueError: If data is not (T, 1) shape
+        """
+        # Validate shape
+        if data.shape[1] != 1:
+            raise ValueError(
+                f"AlphaBroadcast requires (T, 1) DataFrame, got shape {data.shape}. "
+                f"Use reduction operators (CrossSum, CrossMean, etc.) to create 1D data."
+            )
+
+        # Force data_type to 'broadcast'
+        super().__init__(
+            data=data,
+            data_type=DataType.BROADCAST,
+            step_counter=step_counter,
+            step_history=step_history,
+            cached=cached,
+            cache=cache
+        )
+
+    def to_series(self) -> pd.Series:
+        """Extract underlying Series (T,).
+
+        Returns:
+            pd.Series with single column extracted
+
+        Example:
+            market_ret = o.cross_mean(returns)  # AlphaBroadcast (T, 1)
+            market_series = market_ret.to_series()  # pd.Series (T,)
+        """
+        return self._data.iloc[:, 0]
+
+    def __repr__(self) -> str:
+        """Return string representation."""
+        expr_str = self._build_expression_string()
+        return (
+            f"AlphaBroadcast("
+            f"expr='{expr_str}', "
+            f"step={self._step_counter}, "
+            f"shape={self._data.shape}, "
+            f"cached={self._cached}, "
+            f"num_cached_steps={len(self._cache)})"
+        )
