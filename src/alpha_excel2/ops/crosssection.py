@@ -50,53 +50,70 @@ class Rank(BaseOperator):
         return data.rank(axis=1, method='average', pct=True)
 
 
-class Demean(BaseOperator):
-    """Cross-sectional mean removal (demeaning) operator.
+class Mean(BaseOperator):
+    """Cross-sectional mean operator.
 
-    Subtracts the cross-sectional mean from each value at each time point.
-    After demeaning, each row has mean = 0 while preserving the variance.
+    Computes the cross-sectional mean across assets at each time point.
+    Can optionally return the mean-removed (demeaned) values instead.
 
     This is a foundational operator for market-neutral strategies where you
-    want to remove average market movement and focus on relative performance.
+    want to compute or remove average market movement and focus on relative performance.
 
     Example:
-        # Remove cross-sectional mean from returns
-        demeaned_returns = o.demean(returns)
+        # Compute cross-sectional mean (broadcast to all assets)
+        cs_mean = o.mean(returns)
+        # Each column (asset) gets the same mean value for that time period
+
+        # Remove cross-sectional mean (demean)
+        demeaned_returns = o.mean(returns, demean=True)
         # Each time period now has mean = 0
 
         # Useful for removing market beta
-        market_neutral_signal = o.demean(raw_signal)
+        market_neutral_signal = o.mean(raw_signal, demean=True)
+
+    Args:
+        demean: If True, subtract the mean (demean). If False, broadcast the mean (default: False)
 
     Note:
-        - Subtracts row mean: value - mean(row)
+        - When demean=False: Returns mean value broadcast to all columns
+        - When demean=True: Subtracts row mean (value - mean(row))
         - NaN values remain NaN in output
-        - All-same-value rows become all zeros (std = 0)
-        - Variance/std preserved (unchanged)
+        - All-same-value rows: demean=False gives same value, demean=True gives zeros
+        - Variance/std preserved when demean=True
     """
 
     input_types = ['numeric']
     output_type = 'numeric'
     prefer_numpy = False  # Use pandas operations (optimized)
 
-    def compute(self, data: pd.DataFrame, **params) -> pd.DataFrame:
-        """Remove cross-sectional mean from each row.
+    def compute(self, data: pd.DataFrame, demean: bool = False) -> pd.DataFrame:
+        """Compute cross-sectional mean or demean values.
 
         Args:
             data: Input DataFrame (T, N) with time on rows, assets on columns
-            **params: Additional parameters (currently unused)
+            demean: If True, subtract the mean. If False, broadcast the mean (default: False)
 
         Returns:
-            DataFrame with row means subtracted
+            DataFrame with cross-sectional means (demean=False) or demeaned values (demean=True)
 
         Note:
-            Uses pandas mean(axis=1, skipna=True) to compute cross-sectional mean,
-            then subtracts from each value. NaN positions are preserved.
+            Uses pandas mean(axis=1, skipna=True) to compute cross-sectional mean.
+            - demean=False: Broadcasts mean to all columns (each row filled with its mean)
+            - demean=True: Subtracts mean from each value (mean-centered)
+            NaN positions are preserved in output.
         """
         # Compute row-wise mean (cross-sectional mean at each time point)
         row_mean = data.mean(axis=1, skipna=True)
 
-        # Subtract mean from each row (broadcasting)
-        return data.sub(row_mean, axis=0)
+        if demean:
+            # Subtract mean from each row (broadcasting)
+            return data.sub(row_mean, axis=0)
+        else:
+            # Broadcast mean to all columns
+            result = pd.DataFrame(index=data.index, columns=data.columns)
+            for col in data.columns:
+                result[col] = row_mean
+            return result
 
 
 class Zscore(BaseOperator):

@@ -6,9 +6,7 @@ and makes them available as methods (e.g., o.ts_mean(), o.rank()).
 
 import logging
 from typing import Dict, List
-from pathlib import Path
 import inspect
-import importlib
 import re
 
 from alpha_excel2.core.universe_mask import UniverseMask
@@ -52,83 +50,70 @@ class OperatorRegistry:
         self._discover_operators()
 
     def _discover_operators(self):
-        """Scan all modules in ops/ and register operators.
+        """Discover and register operators from ops.__all__.
 
         This method:
-        1. Finds all .py files in ops/ directory (excluding __init__.py)
-        2. Imports each module dynamically
-        3. Finds all BaseOperator subclasses (excluding abstract classes)
-        4. Converts class names to snake_case
-        5. Checks for name collisions
-        6. Instantiates operators with dependencies
-        7. Sets registry reference for composition
-        8. Warns if module has no operators
+        1. Imports alpha_excel2.ops module
+        2. Iterates through __all__ exports (excluding BaseOperator)
+        3. Converts class names to snake_case
+        4. Checks for name collisions
+        5. Instantiates operators with dependencies
+        6. Sets registry reference for composition
+        7. Determines category from operator's module
 
         Raises:
             RuntimeError: If two operators convert to the same snake_case name
-            ImportError: If a module cannot be imported
+            ImportError: If ops module cannot be imported
         """
         # Import here to avoid circular dependency
-        # (core.__init__ imports this class, which would import ops.base,
-        # which imports core.alpha_data, which imports core.__init__ again)
         from alpha_excel2.ops.base import BaseOperator
+        import alpha_excel2.ops as ops_module
 
-        ops_dir = Path(__file__).parent.parent / 'ops'
+        # Get all exported operators from ops.__all__
+        for operator_name in ops_module.__all__:
+            if operator_name == 'BaseOperator':
+                continue  # Skip base class
 
-        # Find all .py files in ops/ (excluding __init__.py and base.py)
-        for module_file in ops_dir.glob('*.py'):
-            if module_file.name.startswith('_') or module_file.name == 'base.py':
+            # Get the operator class
+            operator_class = getattr(ops_module, operator_name)
+
+            # Verify it's a BaseOperator subclass
+            if not (inspect.isclass(operator_class) and 
+                    issubclass(operator_class, BaseOperator) and
+                    operator_class is not BaseOperator):
+                logger.warning(f"'{operator_name}' in __all__ is not a valid operator class")
                 continue
 
-            module_name = module_file.stem  # e.g., 'timeseries', 'crosssection'
+            # Convert to snake_case
+            method_name = self._camel_to_snake(operator_name)
 
-            try:
-                # Import module dynamically
-                module = importlib.import_module(f'alpha_excel2.ops.{module_name}')
+            # Check for collision
+            if method_name in self._operators:
+                existing_class = self._operators[method_name].__class__.__name__
+                raise RuntimeError(
+                    f"Operator name collision: '{method_name}' "
+                    f"(from {existing_class} and {operator_name}). "
+                    f"Cannot register duplicate operator names."
+                )
 
-                # Find BaseOperator subclasses
-                operators_found = 0
-                for name, obj in inspect.getmembers(module, inspect.isclass):
-                    if (issubclass(obj, BaseOperator) and
-                        obj is not BaseOperator and
-                        not inspect.isabstract(obj)):
+            # Instantiate with dependencies
+            operator_instance = operator_class(
+                universe_mask=self._universe_mask,
+                config_manager=self._config_manager,
+                registry=None
+            )
 
-                        # Convert to snake_case
-                        method_name = self._camel_to_snake(name)
+            # Set registry reference for composition
+            operator_instance._registry = self
 
-                        # Check for collision
-                        if method_name in self._operators:
-                            existing_class = self._operators[method_name].__class__.__name__
-                            raise RuntimeError(
-                                f"Operator name collision: '{method_name}' "
-                                f"(from {existing_class} and {name}). "
-                                f"Cannot register duplicate operator names."
-                            )
+            # Determine category from operator's module
+            module_name = operator_class.__module__.split('.')[-1]  # e.g., 'timeseries', 'crosssection'
 
-                        # Instantiate with dependencies
-                        operator_instance = obj(
-                            universe_mask=self._universe_mask,
-                            config_manager=self._config_manager,
-                            registry=None
-                        )
+            # Register
+            self._operators[method_name] = operator_instance
+            self._operator_categories[method_name] = module_name
 
-                        # Set registry reference for composition
-                        operator_instance._registry = self
-
-                        # Register
-                        self._operators[method_name] = operator_instance
-                        self._operator_categories[method_name] = module_name
-                        operators_found += 1
-
-                # Warn if module had no operators
-                if operators_found == 0:
-                    logger.warning(
-                        f"Module 'ops.{module_name}' contains no operators"
-                    )
-
-            except ImportError as e:
-                logger.error(f"Failed to import ops.{module_name}: {e}")
-                raise
+        logger.info(f"Registered {len(self._operators)} operators from ops.__all__")
 
     def _camel_to_snake(self, name: str) -> str:
         """Convert CamelCase to snake_case.
